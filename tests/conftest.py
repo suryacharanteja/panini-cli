@@ -17,3 +17,9 @@ def no_personal_config(monkeypatch, tmp_path_factory):
     # Tests never read the developer's ~/.panini/config.toml.
     monkeypatch.setenv("PANINI_CONFIG", str(tmp_path_factory.getbasetemp() / "no-config.toml"))
     monkeypatch.delenv("PANINI_CLI_PROFILE", raising=False)
+
+
+@pytest.fixture(autouse=True)
+def private_data_dir(monkeypatch, tmp_path):
+    # Sessions, receipts and the usage ledger go to a per-test folder.
+    monkeypatch.setenv("PANINI_DATA_DIR", str(tmp_path / "panini-data"))

@@ -58,6 +58,11 @@ MAX_MATCHES = 200
 SEARCH_BYTES = 64 * 1024 * 1024
 SEARCH_SECONDS = 15
 CODE_SEARCH_MAX_RESULTS = 20
+# Lines that define a symbol rank above lines that merely mention it.
+_DEFINITION = re.compile(
+    r"^\s*(?:export\s+(?:default\s+)?)?(?:async\s+)?(?:def|class|function|fn|pub\s+fn|func|interface|type|struct|"
+    r"enum|impl|trait|const|let|var|module|namespace|public\s+(?:static\s+)?(?:class|interface|\w+\s+\w+\s*\())\b"
+)
 CODE_SEARCH_MAX_CHARS = 12_000
 
 
@@ -281,6 +286,7 @@ def search_code(ws, query, path=None, glob=None, max_results=None, selector=None
                 hits * 10
                 + sum(term in basename for term in terms) * 3
                 + sum(term in path_text for term in terms)
+                + (15 if _DEFINITION.match(line) else 0)
             )
             digest = digest or hashlib.sha256(data).hexdigest()
             candidates.append((score, label, number, line.strip()[:180], digest))
@@ -620,3 +626,8 @@ TOOLS = [
     ),
     PLAN_TOOL,
 ]
+
+# The subset offered to small local models: fewer choices, no multi-file patch syntax, no terminals.
+LOCAL_TOOLS = frozenset(
+    {"list_files", "read_file", "search_files", "search_code", "edit_file", "write_file", "run_command", "update_plan"}
+)

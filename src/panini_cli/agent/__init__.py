@@ -7,4 +7,4 @@ host's credentials. PANINI drives it over the same app-server protocol it uses f
 any compatible coding runtime.
 """
 
-VERSION = "1.1.0"
+VERSION = "2.0.0"

@@ -57,21 +57,33 @@ def transcript(items):
     return text[-MAX_TRANSCRIPT_CHARS:]
 
 
-async def summarize(items, fallback_model):
-    """Summary text from the local model if possible, else from `fallback_model`."""
-    request = [{"role": "user", "content": "Transcript:\n" + transcript(items)}]
+async def oneshot(instructions, text, fallback_model):
+    """A single tool-free answer: from the free local model when it is available, else `fallback_model`.
+    Returns (text, model id)."""
+    request = [{"role": "user", "content": text}]
     if config.local_enabled():
         from . import ollama
 
         if ollama.has_model(config.local_model()):
             try:
-                turn = await ollama.OllamaModel(config.local_model()).respond(INSTRUCTIONS, request, [])
+                turn = await ollama.OllamaModel(config.local_model()).respond(instructions, request, [])
                 if turn.text.strip():
                     return turn.text.strip(), config.local_model()
             except ModelError:
                 pass
-    turn = await fallback_model.respond(INSTRUCTIONS, request, [])
+    turn = await fallback_model.respond(instructions, request, [])
     return turn.text.strip(), getattr(fallback_model, "model", "model")
+
+
+async def summarize(items, fallback_model):
+    """Summary text from the local model if possible, else from `fallback_model`."""
+    return await oneshot(INSTRUCTIONS, "Transcript:\n" + transcript(items), fallback_model)
+
+
+COMMIT_INSTRUCTIONS = (
+    "Write a git commit message for the diff below. First line: imperative summary under 72 characters. "
+    "Then a blank line and up to 5 short bullet points on what changed and why. Output only the message."
+)
 
 
 def compacted(summary):

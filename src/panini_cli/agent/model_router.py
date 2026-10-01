@@ -98,11 +98,39 @@ def model_options() -> list[ModelOption]:
     return options or [ModelOption(DEFAULT_ROUTER_FALLBACK_MODEL, "balanced", DEFAULT_ROUTER_FALLBACK_MODEL)]
 
 
+LEARN_WINDOW_DAYS = 14
+LEARN_MIN_TURNS = 5
+LEARN_MAX_FAILURE = 0.4
+_learned = {"at": 0.0, "value": None}
+
+
+def local_track_record():
+    """(turns, failures) for turns that started on the local model in the last two weeks, from the
+    usage ledger. A failure is a turn that escalated to the cloud or did not complete."""
+    import time
+
+    from . import ledger
+
+    now = time.monotonic()
+    if _learned["value"] is not None and now - _learned["at"] < 60:
+        return _learned["value"]
+    rows = ledger.read(time.time() - LEARN_WINDOW_DAYS * 86400)
+    local = [r for r in rows if r.get("kind") == "turn" and is_local(r.get("model") or "")]
+    failures = sum(1 for r in local if r.get("escalated") or r.get("status") != "completed")
+    _learned.update(at=now, value=(len(local), failures))
+    return _learned["value"]
+
+
+def local_is_earning_its_keep():
+    turns, failures = local_track_record()
+    return turns < LEARN_MIN_TURNS or failures / turns <= LEARN_MAX_FAILURE
+
+
 def routing_options(*, allow_local: bool = True) -> list[ModelOption]:
     """The configured cloud models plus, when usable, the local one. Without an OpenAI key
     only the local model can serve the request."""
     options = model_options() if configured_key() else []
-    if allow_local and local_enabled():
+    if allow_local and local_enabled() and (not options or local_is_earning_its_keep()):
         from . import ollama
 
         name = local_model()

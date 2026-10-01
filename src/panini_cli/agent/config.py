@@ -58,6 +58,14 @@ def local_model():
     return name if name.startswith(LOCAL_PREFIX) else LOCAL_PREFIX + name
 
 
+def local_strong_model():
+    """Optional bigger local model tried before the cloud when the small one fails (e.g. qwen2.5:7b)."""
+    name = os.getenv("PANINI_CLI_LOCAL_STRONG_MODEL", "").strip()
+    if not name:
+        return None
+    return name if name.startswith(LOCAL_PREFIX) else LOCAL_PREFIX + name
+
+
 def local_enabled():
     return os.getenv("PANINI_CLI_LOCAL", "auto").strip().lower() not in {"off", "0", "false", "no"}
 
@@ -78,6 +86,14 @@ def _integer(name, default, low, high):
         return default
 
 
+def _budget():
+    try:
+        value = float(os.getenv("PANINI_CLI_BUDGET_USD", "") or 0)
+    except ValueError:
+        return None
+    return value if value > 0 else None
+
+
 def command_mode():
     mode = os.getenv("PANINI_CLI_SANDBOX", DEFAULT_SANDBOX).strip().lower() or DEFAULT_SANDBOX
     if mode not in {"none", "native", "codex", "docker"}:
@@ -95,6 +111,7 @@ class Settings:
     command_timeout: int = 120
     request_timeout: float = 180.0
     sandbox: str = DEFAULT_SANDBOX  # "none", "native", "codex", or "docker"
+    budget_usd: float | None = None  # Stop a session's priced cloud spend at this amount.
 
     @classmethod
     def from_env(cls, *, model=None, reasoning_effort=None):
@@ -118,4 +135,5 @@ class Settings:
             context_tokens=_integer("PANINI_CLI_CONTEXT_TOKENS", cls.context_tokens, 20_000, 1_000_000),
             command_timeout=_integer("PANINI_CLI_COMMAND_TIMEOUT", cls.command_timeout, 5, 600),
             sandbox=command_mode(),
+            budget_usd=_budget(),
         )

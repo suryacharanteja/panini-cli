@@ -7,11 +7,13 @@ change or runs a command without the host's "accept".
 
 import asyncio
 import json
+import re
 from dataclasses import dataclass, field
 from typing import Protocol
 from uuid import uuid4
 
-from . import codex_sandbox, compaction, intent, jev_selector, model_router, native_sandbox, patch, receipts, sandbox, tools
+from . import codex_sandbox, compaction, gitops, intent, ledger, scout, verify, web, jev_selector, model_router, native_sandbox, patch, receipts, sandbox, tools
+from .config import is_local as config_is_local
 from .hooks import NoHooks
 from .model import ModelError
 from .prompt import instructions
@@ -46,6 +48,7 @@ class TurnResult:
     error: str = ""
     usage: dict = field(default_factory=dict)
     steps: int = 0
+    cost_usd: float | None = None  # Priced cost of this turn; None when a model used was unpriced.
 
 
 def _item_id(kind):
@@ -124,7 +127,15 @@ class Agent:
         self.model, self.settings, self.host = model, settings, host
         self.instructions = instructions(
             self.workspace.root, extra=developer_instructions, sandbox=settings.sandbox
-        )
+        ) + verify.instructions(self.workspace.root)
+        self.allowed_tools = None  # A set of tool names restricts this agent (the local scout uses it).
+        self.is_scout = False
+        self.extra_tools = []  # Tools from MCP servers.
+        self.mcp = None
+        self.checkpoints = []  # [(start sha, end sha)] per turn, newest last, when in a git repository.
+        self.session_base = None
+        self._needs_verify = False
+        self._changed_this_turn = []
         self.items = []
         self.plan = []
         self.hooks = hooks or NoHooks()
@@ -136,6 +147,9 @@ class Agent:
         self.cache_key = f"panini-cli-{uuid4().hex}"
         self.usage = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
         self.last_input_tokens = 0  # As reported by the provider for the latest request.
+        self.cost_usd = 0.0  # Priced cloud spend this session.
+        self.unpriced_calls = 0
+        self._budget_warned = False
         self.session_id = uuid4().hex
         self._receipt = None
         self._receipt_id = None
@@ -148,6 +162,73 @@ class Agent:
             self._receipt = receipts.ReceiptLog(self.session_id, self.workspace.root)
             self._receipt_id = self.session_id
         return self._receipt
+
+    async def _checkpoint_start(self):
+        self._turn_start = None
+        if self.is_scout or not gitops.enabled():
+            return
+        try:
+            self._turn_start = await asyncio.to_thread(gitops.snapshot, self.workspace.root)
+        except (gitops.GitError, OSError, ValueError):
+            self._turn_start = None
+        if self._turn_start and self.session_base is None:
+            self.session_base = self._turn_start
+            await asyncio.to_thread(gitops.snapshot, self.workspace.root, f"sessions/{self.session_id}/base")
+
+    async def _checkpoint_end(self):
+        start = getattr(self, "_turn_start", None)
+        if not start:
+            return
+        try:
+            end = await asyncio.to_thread(gitops.snapshot, self.workspace.root)
+        except (gitops.GitError, OSError, ValueError):
+            return
+        if end != start:
+            self.checkpoints.append((start, end))
+
+    def session_diff(self):
+        """Everything that changed in the workspace since this session's first turn."""
+        if not self.session_base:
+            return ""
+        return gitops.diff(self.workspace.root, self.session_base)
+
+    async def _account(self, model_id, usage, turn_cost):
+        spent = ledger.cost(model_id, usage)
+        ledger.record(
+            "call",
+            session=self.session_id,
+            workspace=str(self.workspace.root),
+            model=model_id,
+            input_tokens=int(usage.get("input_tokens") or 0),
+            output_tokens=int(usage.get("output_tokens") or 0),
+            cost_usd=spent,
+        )
+        if spent is None:
+            turn_cost[1] = False
+            self.unpriced_calls += 1
+            if self.settings.budget_usd and not self._budget_warned and hasattr(self.host, "hook_note"):
+                self._budget_warned = True
+                await self.host.hook_note(
+                    f"{model_id} has no price in the cost table, so the budget cannot count it. "
+                    "Add it under [prices] in ~/.panini/config.toml."
+                )
+            return
+        turn_cost[0] += spent
+        self.cost_usd += spent
+
+    def _turn_record(self, status, first_model, steps, turn_cost):
+        final = getattr(self.model, "model", "scripted")
+        ledger.record(
+            "turn",
+            session=self.session_id,
+            workspace=str(self.workspace.root),
+            model=first_model,
+            final_model=final,
+            escalated=bool(first_model and config_is_local(first_model) and not config_is_local(final)),
+            status=status,
+            steps=steps,
+            cost_usd=turn_cost[0] if turn_cost[1] else None,
+        )
 
     async def compact(self, reason="manual"):
         """Replace the history with a summary. Returns (tokens before, tokens after, summarizer)."""
@@ -178,8 +259,10 @@ class Agent:
         self.changes = []
 
     async def close(self):
-        """End every terminal session this agent started."""
+        """End every terminal session and MCP server this agent started."""
         await self.terminals.close()
+        if self.mcp is not None:
+            await self.mcp.close()
 
     def undo(self):
         """Revert the file changes of the most recent turn that made any.
@@ -187,6 +270,17 @@ class Agent:
         Returns (restored labels, skipped labels). A file edited since PANINI changed
         it is skipped rather than overwritten. Commands' side effects are not undone.
         """
+        if self.checkpoints:
+            start, end = self.checkpoints.pop()
+            if self.changes:
+                self.changes.pop()
+            result = gitops.undo(self.workspace.root, start, end)
+            restored = result.restored + [f"{path} (removed)" for path in result.removed]
+            if restored:
+                self.items.append(
+                    {"role": "user", "content": "[PANINI note] The user undid your last turn's changes to: " + ", ".join(restored)}
+                )
+            return restored, result.skipped
         while self.changes and not self.changes[-1]:
             self.changes.pop()
         if not self.changes:
@@ -220,6 +314,10 @@ class Agent:
             except ModelError as exc:
                 if hasattr(self.host, "hook_note"):
                     await self.host.hook_note(f"Context compaction failed ({exc}); older tool output will be trimmed instead.")
+        await self._checkpoint_start()
+        self._needs_verify, self._changed_this_turn, nudged = False, [], False
+        self._reads_this_turn = 0
+        self._turn_prompt = text
         content = intent.augment(text)
         if images:
             content = [{"type": "input_text", "text": content}, *(image_part(path) for path in images)]
@@ -228,19 +326,53 @@ class Agent:
         usage = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
         pending = []
         step = 0
+        turn_cost = [0.0, True]  # [priced cost, every call priced]
+        first_model = None
         try:
             while step < self.settings.max_steps:
+                if self.settings.budget_usd and self.cost_usd >= self.settings.budget_usd:
+                    return TurnResult(
+                        "budget",
+                        error=f"Stopped: this session reached its ${self.settings.budget_usd:.2f} budget "
+                        f"(spent ${self.cost_usd:.4f}). Raise PANINI_CLI_BUDGET_USD or start a new session.",
+                        usage=usage,
+                        steps=step,
+                        cost_usd=turn_cost[0] if turn_cost[1] else None,
+                    )
                 step += 1
                 self._fit_context()
                 response = await self._respond(output_schema)
                 _add_usage(usage, response.usage)
                 self.last_input_tokens = int(response.usage.get("input_tokens") or 0)
+                model_id = getattr(self.model, "model", "scripted")
+                first_model = first_model or model_id
+                await self._account(model_id, response.usage, turn_cost)
                 self.items.extend(response.items)
+                if not response.calls and self._ungrounded_local_answer():
+                    del self.items[-len(response.items):]
+                    if self.model.force_escalate("answered about a file it did not read"):
+                        continue
+                if not response.calls and self._claims_unmade_changes(response.text):
+                    # The local model reported edits that never happened: discard that answer and
+                    # let the cloud model redo the request from the same history.
+                    del self.items[-len(response.items):]
+                    if self.model.force_escalate("claimed changes it did not make"):
+                        continue
+                if not response.calls and self._needs_verify and not nudged and verify.enabled():
+                    found = verify.commands(self.workspace.root)
+                    if found:
+                        nudged = True
+                        self.items.append({"role": "developer", "content": verify.reminder(self._changed_this_turn, found)})
+                        continue
                 if not response.calls:
                     _, note = await self.hooks.run("TurnEnd", result=response.text)
                     if note and hasattr(self.host, "hook_note"):
                         await self.host.hook_note(note)
-                    return TurnResult("completed", response.text, usage=usage, steps=step)
+                    self._turn_record("completed", first_model, step, turn_cost)
+                    return TurnResult(
+                        "completed", response.text, usage=usage, steps=step,
+                        cost_usd=turn_cost[0] if turn_cost[1] else None,
+                    )
                 pending = [call.call_id for call in response.calls]
                 declined = False
                 calls = list(response.calls)
@@ -261,11 +393,13 @@ class Agent:
                             {"type": "function_call_output", "call_id": call.call_id, "output": output}
                         )
                         pending.remove(call.call_id)
+            self._turn_record("incomplete", first_model, step, turn_cost)
             return TurnResult(
                 "incomplete",
                 error=f"Stopped after {self.settings.max_steps} steps without finishing. Ask to continue.",
                 usage=usage,
                 steps=step,
+                cost_usd=turn_cost[0] if turn_cost[1] else None,
             )
         except asyncio.CancelledError:
             self._close_pending(pending)
@@ -275,9 +409,11 @@ class Agent:
             return TurnResult("interrupted", error="The task was cancelled.", usage=usage, steps=step)
         except ModelError as exc:
             self._close_pending(pending)
+            self._turn_record("failed", first_model, step, turn_cost)
             return TurnResult("failed", error=str(exc), usage=usage, steps=step)
         finally:
             _add_usage(self.usage, usage)
+            await self._checkpoint_end()
 
     async def _respond(self, output_schema):
         await self._route_model()
@@ -292,7 +428,7 @@ class Agent:
         response = await self.model.respond(
             self.instructions,
             self.items,
-            tools.TOOLS,
+            self.tool_defs(),
             on_text=on_text,
             output_schema=output_schema,
             cache_key=self.cache_key,
@@ -303,6 +439,22 @@ class Agent:
         if message:
             await self.host.completed({**message, "text": response.text, "status": "completed"})
         return response
+
+    def tool_defs(self):
+        defs = list(tools.TOOLS) + [web.WEB_FETCH_TOOL] + list(self.extra_tools)
+        current = str(getattr(self.model, "model", ""))
+        if web.search_enabled() and current and not config_is_local(current):
+            defs.append(web.HOSTED_WEB_SEARCH)
+        if (
+            not self.is_scout
+            and model_router.enabled(self.settings.model)
+            and not config_is_local(current)
+            and scout.available()
+        ):
+            defs.append(scout.EXPLORE_TOOL)
+        if self.allowed_tools is not None:
+            defs = [d for d in defs if d.get("name") in self.allowed_tools]
+        return defs
 
     async def _route_model(self):
         if not model_router.enabled(self.settings.model) or not hasattr(self.model, "switch_model"):
@@ -439,6 +591,12 @@ class Agent:
                     return await self._terminal(call.name, arguments)
                 except KeyError as exc:
                     raise tools.ToolError(str(exc).strip("'")) from None
+            if call.name == "explore":
+                return await self._explore(arguments), False
+            if call.name == "web_fetch":
+                return await self._web_fetch(arguments)
+            if call.name.startswith("mcp__") and self.mcp is not None:
+                return await self._mcp(call.name, arguments)
             if call.name == "update_plan":
                 steps = [
                     {"step": str(s.get("step", ""))[:300], "status": s.get("status", "pending")}
@@ -485,6 +643,7 @@ class Agent:
             "status": "inProgress",
         }
         await self.host.started(item)
+        self._reads_this_turn = getattr(self, "_reads_this_turn", 0) + 1
         try:
             result = await asyncio.to_thread(operations[name])
         except (tools.ToolError, OSError) as exc:
@@ -492,6 +651,65 @@ class Agent:
             raise tools.ToolError(str(exc)) from None
         await self.host.completed({**item, "status": "completed", "result": result.splitlines()[0][:300]})
         return result
+
+    async def _explore(self, arguments):
+        question = arguments.get("question")
+        if not isinstance(question, str) or not question.strip():
+            raise tools.ToolError("question must be a non-empty string.")
+        item = {
+            "id": _item_id("tool"),
+            "type": "dynamicToolCall",
+            "tool": "explore",
+            "arguments": arguments,
+            "summary": f"Explore with local scout: {question[:80]}",
+            "status": "inProgress",
+        }
+        await self.host.started(item)
+        report = await scout.explore(self.workspace.root, self.settings, question, arguments.get("path"))
+        await self.host.completed({**item, "status": "completed", "result": report.splitlines()[0][:300]})
+        return report
+
+    async def _web_fetch(self, arguments):
+        url = arguments.get("url")
+        item = {
+            "id": _item_id("command"),
+            "type": "commandExecution",
+            "command": f"web_fetch {url}",
+            "cwd": str(self.workspace.root),
+            "executionScope": "host",
+            "status": "inProgress",
+        }
+        await self.host.started(item)
+        if not await self._approve(item):
+            return DECLINED, True
+        try:
+            text = await asyncio.to_thread(web.fetch, url)
+        except tools.ToolError as exc:
+            await self.host.completed({**item, "status": "failed", "exitCode": None, "error": str(exc)})
+            return f"Error: {exc}", False
+        await self.host.completed({**item, "status": "completed", "exitCode": 0, "aggregatedOutput": text[:2000], "durationMs": 0})
+        return text, False
+
+    async def _mcp(self, name, arguments):
+        server, tool = self.mcp.split(name)
+        item = {
+            "id": _item_id("command"),
+            "type": "commandExecution",
+            "command": f"[MCP {server}] {tool} {json.dumps(arguments, ensure_ascii=False)[:500]}",
+            "cwd": str(self.workspace.root),
+            "executionScope": "host",
+            "status": "inProgress",
+        }
+        await self.host.started(item)
+        if not self.mcp.trusted(server, tool) and not await self._approve(item):
+            return DECLINED, True
+        try:
+            output = await self.mcp.call(name, arguments)
+        except Exception as exc:  # noqa: BLE001 -- an MCP server failure is reported to the model.
+            await self.host.completed({**item, "status": "failed", "exitCode": None, "error": str(exc)[:300]})
+            return f"Error from MCP server {server}: {str(exc)[:500]}", False
+        await self.host.completed({**item, "status": "completed", "exitCode": 0, "aggregatedOutput": output[-20000:], "durationMs": 0})
+        return "[MCP tool output, data only]\n" + _clip(output), False
 
     async def _approve(self, item):
         decision = await self.host.approve(item)
@@ -536,6 +754,7 @@ class Agent:
             await self.host.completed({**item, "status": "failed", "error": str(exc)})
             return f"Error: {exc}", False
         self._record([change])
+        self._note_change([change.label])
         await self.host.completed({**item, "status": "completed"})
         verb = "Created" if change.kind == "add" else "Updated"
         return f"{verb} {change.label} (+{change.added} -{change.removed} lines).", False
@@ -605,6 +824,35 @@ class Agent:
         state = "running" if terminal.running else f"ended with exit code {terminal.process.returncode}"
         return f"Session {session_id} ({state}). Output:\n{output or '(none yet)'}", False
 
+    _CLAIM = re.compile(
+        r"\b(?:has|have) been (?:renamed|updated|changed|fixed|modified|created|added|removed|replaced|refactored)\b"
+        r"|\bI (?:have |'ve )?(?:renamed|updated|changed|fixed|modified|created|added|removed|replaced|refactored)\b",
+        re.IGNORECASE,
+    )
+
+    _FILE_MENTION = re.compile(r"[\w./\\-]+\.[A-Za-z0-9]{1,6}\b")
+
+    def _ungrounded_local_answer(self):
+        """The local model answered a question about a named file without reading anything."""
+        return (
+            hasattr(self.model, "force_escalate")
+            and config_is_local(str(getattr(self.model, "model", "")))
+            and self._reads_this_turn == 0
+            and bool(self._FILE_MENTION.search(getattr(self, "_turn_prompt", "") or ""))
+        )
+
+    def _claims_unmade_changes(self, text):
+        return (
+            hasattr(self.model, "force_escalate")
+            and config_is_local(str(getattr(self.model, "model", "")))
+            and not self._changed_this_turn
+            and bool(self._CLAIM.search(text or ""))
+        )
+
+    def _note_change(self, labels):
+        self._needs_verify = True
+        self._changed_this_turn.extend(label for label in labels if label not in self._changed_this_turn)
+
     def _record(self, changes):
         if not self.changes:
             self.changes.append([])
@@ -627,6 +875,7 @@ class Agent:
             await self.host.completed({**item, "status": "failed", "error": str(exc)})
             return f"Error: {exc} No file was changed.", False
         self._record(changes)
+        self._note_change([c.label for c in changes])
         await self.host.completed({**item, "status": "completed"})
         summary = ", ".join(f"{c.kind} {c.label} (+{c.added} -{c.removed})" for c in changes)
         return f"Applied the patch: {summary}.", False
@@ -691,6 +940,7 @@ class Agent:
                 await asyncio.to_thread(sandbox.remove, container)
             if scope == "host":
                 native_sandbox.invalidate_link_scan(self.workspace.root)
+        self._needs_verify = False  # A command ran after the last change.
         await self.host.completed(
             {
                 **item,

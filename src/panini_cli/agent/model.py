@@ -227,6 +227,15 @@ class RoutedModel:
     def switch_model(self, model):
         self.model = model
 
+    def force_escalate(self, reason):
+        """Move this session from the local model to the cloud fallback (the loop found a bad answer)."""
+        if not (self.escalate and config.is_local(self.model)):
+            return False
+        self.escalation = f"{self.model}: {reason}"
+        self.local_blocked = True
+        self.model = model_router.fallback_model()
+        return True
+
     def _cloud_backend(self):
         if self._cloud is None:
             try:
@@ -247,29 +256,40 @@ class RoutedModel:
     async def respond(self, instructions, items, tools, on_text=None, output_schema=None, cache_key=None):
         if not config.is_local(self.model):
             return await self._cloud_backend().respond(instructions, items, tools, on_text, output_schema, cache_key)
-        from .ollama import invalid_turn
+        from . import ollama
+        from .tools import LOCAL_TOOLS
 
-        streamed = []
+        # A small model does better with fewer, simpler tools; anything else means escalation.
+        local_tools = [tool for tool in tools if tool.get("name") in LOCAL_TOOLS]
+        while True:
+            streamed = []
 
-        async def watch(item_id, delta):
-            streamed.append(delta)
-            if on_text:
-                await on_text(item_id, delta)
+            async def watch(item_id, delta, streamed=streamed):
+                streamed.append(delta)
+                if on_text:
+                    await on_text(item_id, delta)
 
-        try:
-            turn = await self._local_backend().respond(instructions, items, tools, watch, output_schema, cache_key)
-            problem = invalid_turn(turn, tools)
-            if problem:
-                raise ModelError(f"the local model gave an unusable turn ({problem})")
-            return turn
-        except ModelError as exc:
-            # Text already shown to the user cannot be taken back, so only retry silently.
-            if not self.escalate or streamed:
-                raise
-            self.local_blocked = True
-            self.escalation = str(exc)[:160]
-            self.model = model_router.fallback_model()
-            return await self._cloud_backend().respond(instructions, items, tools, on_text, output_schema, cache_key)
+            try:
+                turn = await self._local_backend().respond(
+                    instructions, items, local_tools, watch, output_schema, cache_key
+                )
+                problem = ollama.invalid_turn(turn, local_tools)
+                if problem:
+                    raise ModelError(f"the local model gave an unusable turn ({problem})")
+                return turn
+            except ModelError as exc:
+                # Anything already streamed stays on screen; the retry's answer follows it. Failing the
+                # whole task over a visible "I need to search…" line would be worse.
+                if not self.escalate:
+                    raise
+                strong = config.local_strong_model()
+                self.escalation = f"{self.model}: {str(exc)[:140]}"
+                if strong and self.model != strong and ollama.has_model(strong):
+                    self.model = strong  # One step up on this machine before paying for the cloud.
+                    continue
+                self.local_blocked = True
+                self.model = model_router.fallback_model()
+                return await self._cloud_backend().respond(instructions, items, tools, on_text, output_schema, cache_key)
 
 
 def create_model(settings):

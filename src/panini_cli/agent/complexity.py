@@ -19,14 +19,20 @@ HARD = (
 )
 # Words that mean "small, mechanical, or a question". They never cancel a hard signal.
 EASY = (
-    "what is", "what's", "explain", "list", "show", "print", "rename", "typo", "format", "git status",
+    "what is", "what's", "what does", "explain", "list", "show", "print", "git status",
     "git log", "git diff", "how many", "which file", "where is", "summar", "count", "version",
-    "hello", "thanks", "commit message",
+    "hello", "thanks",
 )
 # Ordinary engineering words: not hard by themselves, but too vague for the small local model.
 MILD = (
     "fix", "bug", "error", "broken", "fails", "failing", "traceback", "exception", "crash",
     "test", "add ", "update", "change",
+)
+# Any request to modify files. The small local model is only trusted to answer questions:
+# in the 2026-10-01 eval it claimed edits it never made.
+EDIT = (
+    "rename", "edit", "write", "create", "delete", "remove", "move", "replace", "implement", "refactor",
+    "fix", "add ", "update", "change", "modify", "insert", "append", "format", "typo", "install", "commit",
 )
 
 
@@ -78,7 +84,10 @@ def estimate(prompt: str, *, context_tokens: int = 0) -> Complexity:
     if context_tokens > 12_000:  # A long session is hard for a small model to keep straight.
         points += 2
         signals.append("long-context")
-    if points <= 0 and size <= 300:
+    edits = any(word in text for word in EDIT)
+    if edits:
+        signals.append("edits")
+    if points <= 0 and size <= 300 and not edits:
         tier = "local"
     elif points <= 1:
         tier = "cheap"

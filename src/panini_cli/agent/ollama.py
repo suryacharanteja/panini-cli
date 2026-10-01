@@ -208,4 +208,17 @@ def invalid_turn(turn, tool_defs=None):
             return f"malformed arguments for {call.name}"
     if not turn.calls and not turn.text.strip():
         return "empty response"
+    if not turn.calls and _announces_action(turn.text):
+        return "described a tool call instead of making it"
     return None
+
+
+_INTENT = re.compile(
+    r"^\s*(?:i need to|i will|i'll|i am going to|i'm going to|let me|let's|i should|first,? i|next,? i)\b",
+    re.IGNORECASE,
+)
+
+
+def _announces_action(text):
+    """A short reply that only says what the model is about to do, without doing it."""
+    return len(text) < 600 and bool(_INTENT.search(text))

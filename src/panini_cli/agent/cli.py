@@ -32,7 +32,7 @@ MODES = {
     "edits": "file changes pre-approved, commands ask",
     "auto": "everything pre-approved",
 }
-HELP = "/new starts a new conversation · /compact summarizes the history · /plan shows the plan · /undo reverts the last changes · /power enables fast UAT auto-approval · /approvals MODE · /model NAME switches model · /exit quits · Ctrl+C stops the current task"
+HELP = "@file attaches a file · /image PATH · /new · /diff · /review · /commit · /compact · /plan shows the plan · /undo reverts the last changes · /power enables fast UAT auto-approval · /approvals MODE · /model NAME switches model · /exit quits · Ctrl+C stops the current task"
 LOCAL_HELP = "Local commands: auth login · auth status · auth logout · doctor · sandbox status · sessions · receipts SESSION_ID"
 
 WELCOME = r"""
@@ -447,6 +447,8 @@ def build_parser():
     run.add_argument("--json", action="store_true", help="print JSON Lines events on stdout (logs go to stderr)")
     run.add_argument("--output-schema", metavar="FILE", help="JSON Schema the final answer must match")
     run.add_argument("--image", action="append", metavar="FILE", help="attach an image (repeatable)")
+    usage_command = commands.add_parser("usage", help="cloud spend, local savings and routing outcomes")
+    usage_command.add_argument("--days", type=int, default=7, help="look back this many days (default 7)")
     config_command = commands.add_parser("config", help="show or create ~/.panini/config.toml")
     config_command.add_argument("action", nargs="?", choices=["show", "init", "path"], default="show")
     resume = commands.add_parser(
@@ -456,6 +458,7 @@ def build_parser():
     commands.add_parser("sessions", parents=[_options(True)], help="list saved conversations")
     receipt_command = commands.add_parser("receipts", help="verify a session's durable tool receipts")
     receipt_command.add_argument("session", help="session id shown by panini-cli sessions")
+    receipt_command.add_argument("--export", metavar="FILE", help="also write a readable Markdown report")
     hook = commands.add_parser("hooks", parents=[_options(True)], help="list hooks, or trust the project's")
     hook.add_argument(
         "--trust", action="store_true", help="trust this project's .panini/hooks.json as it is now"
@@ -466,6 +469,7 @@ def build_parser():
     commands.add_parser("models", help="show the model router: local model, cloud tiers and Jev")
     route_command = commands.add_parser("route", help="dry-run the router: which model would this task get?")
     route_command.add_argument("prompt", nargs="+", help="the task to route")
+    commands.add_parser("mcp-server", help="serve PANINI's router and agent as MCP tools on stdio")
     jev_command = commands.add_parser("jev", help="manage the Jev routing sidecar")
     jev_commands = jev_command.add_subparsers(dest="jev_command", required=True)
     jev_commands.add_parser("setup", help="install the sidecar into ~/.panini/jev (needs Node.js and npm)")
@@ -480,6 +484,37 @@ def build_parser():
     auth_commands.add_parser("status", help="show whether a key is configured (never prints it)")
     auth_commands.add_parser("logout", help="remove the saved key")
     return parser
+
+
+def usage_command(args):
+    from rich.console import Console
+    from rich.table import Table
+
+    from . import ledger
+
+    console = Console(highlight=False)
+    rows = ledger.read(time.time() - args.days * 86400)
+    if not rows:
+        console.print(f"[dim]No usage recorded in the last {args.days} days ({ledger.ledger_path()}).[/]")
+        return 0
+    data = ledger.summary(rows, reference_model=fallback_model())
+    table = Table(title=f"PANINI CLI usage · last {args.days} days")
+    for column in ("Model", "Calls", "Input tokens", "Output tokens", "Cost"):
+        table.add_column(column, justify="left" if column == "Model" else "right")
+    for model, entry in sorted(data["models"].items(), key=lambda kv: -kv[1]["cost"]):
+        cost = "local · $0" if model.startswith("ollama/") else (
+            f"${entry['cost']:.4f}" + (f" + {entry['unpriced']} unpriced" if entry["unpriced"] else "")
+        )
+        table.add_row(model, str(entry["calls"]), f"{entry['input']:,}", f"{entry['output']:,}", cost)
+    console.print(table)
+    console.print(f"Priced cloud spend: [bold]${data['cost_usd']:.4f}[/]")
+    if data["local_tokens"]:
+        saved = data["saved_usd"]
+        estimate = f"≈ ${saved:.4f} at {fallback_model()} prices" if saved is not None else f"({fallback_model()} is unpriced)"
+        console.print(f"Handled locally: {data['local_tokens']:,} tokens {estimate}")
+    if data["turns"]:
+        console.print(f"Turns: {data['turns']} · local→cloud escalations: {data['escalations']}")
+    return 0
 
 
 def config_command(args, data):
@@ -537,6 +572,10 @@ def router_command(args, console):
     ready, detail = ollama.available()
     console.print(f"Local   {local_model()}  " + ("[green]ready[/]" if ready else f"[yellow]{escape(detail)}[/]"))
     console.print(f"        {'enabled' if local_enabled() else 'disabled (PANINI_CLI_LOCAL=off)'} · Ollama {ollama.config.ollama_host()}")
+    turns, failures = model_router.local_track_record()
+    if turns:
+        state = "in use" if model_router.local_is_earning_its_keep() else "paused (too many failures; it comes back as they age out)"
+        console.print(f"        last {model_router.LEARN_WINDOW_DAYS} days: {turns} local turns, {failures} escalated or failed — {state}")
     for option in model_options():
         console.print(f"{option.tier.capitalize():<7} {option.id}  [dim]{escape(option.description)}[/]")
     console.print("Cloud   " + ("OPENAI_API_KEY configured" if configured_key() else "[yellow]no OPENAI_API_KEY[/]"))
@@ -545,11 +584,22 @@ def router_command(args, console):
     return 0
 
 
-def report(console, result):
+def money(value):
+    return "unpriced" if value is None else f"${value:.4f}"
+
+
+def report(console, result, agent=None):
     tokens = result.usage.get("total_tokens", 0)
+    spent = f" · {money(result.cost_usd)}" if result.usage.get("total_tokens") else ""
+    session = ""
+    if agent is not None:
+        session = f" · session {money(agent.cost_usd)}" + (" + unpriced" if agent.unpriced_calls else "")
+        window = agent.settings.context_tokens
+        used = min(100, agent.last_input_tokens * 100 // window) if window else 0
+        session += f" · context {used}%"
     if result.status == "completed":
         console.print(
-            f"[dim]✓ done · {result.steps} step{'s' if result.steps != 1 else ''} · {tokens:,} tokens[/]"
+            f"[dim]✓ done · {result.steps} step{'s' if result.steps != 1 else ''} · {tokens:,} tokens{spent}{session}[/]"
         )
     else:
         from rich.markup import escape
@@ -557,23 +607,54 @@ def report(console, result):
         console.print(f"[red]{escape(result.error or result.status)}[/]")
 
 
+async def start_mcp(agent, console):
+    if agent.mcp is None:
+        return
+    await agent.mcp.start()
+    agent.extra_tools = agent.mcp.tool_defs()
+    for name, error in agent.mcp.errors.items():
+        console.print(f"[yellow]MCP server {name} did not start:[/] {error}")
+    if agent.extra_tools:
+        console.print(f"[dim]MCP: {len(agent.extra_tools)} tools from {', '.join(s for s in agent.mcp.servers if s not in agent.mcp.errors)}[/]")
+
+
 def interactive(agent, settings, console, host, approvals):
     print_welcome(console, settings, agent.workspace.root, approvals)
     with asyncio.Runner() as runner:
         try:
+            runner.run(start_mcp(agent, console))
             return _session(agent, settings, console, host, runner)
         finally:
             runner.run(agent.close())
 
 
+def _status(agent, host):
+    window = agent.settings.context_tokens
+    used = min(100, agent.last_input_tokens * 100 // window) if window else 0
+    model = getattr(agent.model, "model", "?")
+    return f"{model} · {host.mode} · ${agent.cost_usd:.4f} · context {used}%"
+
+
 def _session(agent, settings, console, host, runner):
+    from . import ledger, ui
+
+    prompt = ui.make_input(console, agent.workspace.root, ledger.data_dir() / "cli-history.txt", can_ask())
+    pending_images = []
     while True:
         try:
-            text = console.input("\n[bold cyan]›[/] ")
+            text = prompt.ask(_status(agent, host))
         except (EOFError, KeyboardInterrupt):
             console.print()
             return 0
         command = text.strip()
+        if command.startswith("/image"):
+            path = command[len("/image"):].strip().strip('"')
+            if path:
+                pending_images.append(path)
+                console.print(f"[dim]Attached {host.escape(path)}; it goes with your next message.[/]")
+            else:
+                console.print("[dim]Usage: /image PATH[/]")
+            continue
         if not command:
             continue
         if command in ("/exit", "/quit"):
@@ -609,6 +690,32 @@ def _session(agent, settings, console, host, runner):
         if command == "/plan":
             host.plan_now(agent.plan)
             continue
+        if command == "/diff":
+            text = _workspace_diff(agent)
+            if not text.strip():
+                console.print("[dim]No changes in this session (or not a git repository).[/]")
+            else:
+                host._diff(text)
+            continue
+        if command == "/review":
+            text = _workspace_diff(agent)
+            if not text.strip():
+                console.print("[dim]Nothing to review.[/]")
+                continue
+            previous = host.mode
+            host.set_mode("read-only")
+            try:
+                lead = "Use strong. " if model_router_enabled(settings.model) else ""
+                result = runner.run(agent.turn(lead + REVIEW_PROMPT + "\n\n```diff\n" + text[:60_000] + "\n```"))
+                report(console, result, agent)
+            except KeyboardInterrupt:
+                console.print("[yellow]Review stopped.[/]")
+            finally:
+                host.set_mode(previous)
+            continue
+        if command == "/commit":
+            _commit(agent, console, runner)
+            continue
         if command == "/compact":
             try:
                 if not runner.run(agent.compact("manual")):
@@ -630,13 +737,74 @@ def _session(agent, settings, console, host, runner):
             console.print(f"[dim]Model: {settings.model}[/]")
             continue
         try:
-            result = runner.run(agent.turn(text))
+            images, pending_images = pending_images, []
+            message = ui.expand_mentions(text, agent.workspace.root)
+            result = runner.run(agent.turn(message, images=images))
         except KeyboardInterrupt:
             host.end_line()
             console.print("[yellow]Stopped. Changes already applied and commands already run remain.[/]")
             continue
-        report(console, result)
+        except (OSError, ValueError) as exc:
+            console.print(f"[red]{host.escape(str(exc))}[/]")
+            continue
+        report(console, result, agent)
         remember(agent, text)
+
+
+REVIEW_PROMPT = (
+    "Review the following changes as a careful senior engineer. Read surrounding code where needed. "
+    "Report only real problems: bugs, missed edge cases, security issues, broken tests, and unclear code, "
+    "each with path:line, severity (high/medium/low) and a concrete fix. Do not modify files. "
+    "If the changes look correct, say so briefly."
+)
+
+
+def _workspace_diff(agent):
+    from . import gitops
+
+    try:
+        if agent.session_base:
+            return agent.session_diff()
+        root = gitops.repo_root(agent.workspace.root)
+        if root is None:
+            return ""
+        return gitops._git(root, "diff", "--no-ext-diff", "HEAD", "--", ".")
+    except (gitops.GitError, OSError) as exc:
+        return f"(git diff failed: {exc})"
+
+
+def _commit(agent, console, runner):
+    import subprocess
+
+    from . import compaction, gitops
+
+    root = gitops.repo_root(agent.workspace.root)
+    if root is None:
+        console.print("[yellow]Not a git repository.[/]")
+        return
+    status = gitops._git(root, "status", "--porcelain")
+    if not status.strip():
+        console.print("[dim]Nothing to commit.[/]")
+        return
+    patch_text = gitops._git(root, "diff", "--no-ext-diff", "HEAD") + "\n" + status
+    try:
+        message, by = runner.run(compaction.oneshot(compaction.COMMIT_INSTRUCTIONS, patch_text[:40_000], agent.model))
+    except ModelError as exc:
+        console.print(f"[red]Could not draft a message:[/] {exc}")
+        return
+    message = message.strip().strip("`").strip()
+    console.print(f"[dim]Drafted by {by}:[/]\n{message}\n")
+    console.print("[dim]Files:[/]\n" + status)
+    try:
+        answer = console.input("Stage everything above and commit with this message? [y/N] ").strip().lower()
+    except EOFError:
+        answer = ""
+    if answer not in ("y", "yes"):
+        console.print("[dim]Not committed.[/]")
+        return
+    subprocess.run(["git", "-C", str(root), "add", "-A"], check=False)
+    done = subprocess.run(["git", "-C", str(root), "commit", "-F", "-"], input=message, text=True, capture_output=True)
+    console.print(done.stdout.strip() or done.stderr.strip())
 
 
 def _local_session_command(command, agent, settings, console, host):
@@ -869,6 +1037,13 @@ def main(argv=None):
         return 2
     if args.command == "config":
         return config_command(args, user_settings)
+    if args.command == "usage":
+        return usage_command(args)
+    if args.command == "mcp-server":
+        from .mcp import serve_stdio
+
+        asyncio.run(serve_stdio())
+        return 0
     if args.command == "app-server":
         from .server import serve
 
@@ -888,6 +1063,9 @@ def main(argv=None):
             console.print(f"[red]Receipt verification failed:[/] {exc}")
             return 2
         console.print(f"Verified {count} receipt events for {args.session}. Chain head: {head}")
+        if getattr(args, "export", None):
+            Path(args.export).write_text(receipts.report(path, args.session, head), encoding="utf-8")
+            console.print(f"Report written to {args.export}")
         return 0
     if args.command == "sandbox":
         ready, reason = native_sandbox.available()
@@ -1050,6 +1228,11 @@ def main(argv=None):
         )
     agent = Agent(workspace, create_model(settings), settings, host, hooks=configured)
     agent.session_id = sessions.new_id()
+    servers = userconfig.section("mcp_servers")
+    if servers:
+        from .mcp import McpManager
+
+        agent.mcp = McpManager(servers)
     if args.command == "resume":
         try:
             if args.session:
@@ -1090,6 +1273,7 @@ def main(argv=None):
 
             async def once():
                 try:
+                    await start_mcp(agent, console)
                     return await agent.turn(prompt, schema, images=getattr(args, "image", None) or ())
                 finally:
                     await agent.close()
@@ -1114,7 +1298,7 @@ def main(argv=None):
                 session_id=agent.session_id,
             )
         else:
-            report(console, result)
+            report(console, result, agent)
         remember(agent, prompt)
         # 0 done, 1 failed, 3 stopped at the step limit, 4 stopped by the budget, 130 interrupted.
         return {"completed": 0, "incomplete": 3, "budget": 4, "interrupted": 130}.get(result.status, 1)

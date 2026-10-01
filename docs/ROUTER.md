@@ -7,7 +7,12 @@ One question, asked once per user message: **which model should answer this?**
 `local` → `cheap` → `balanced` → `strong` → `frontier`
 
 `local` is a small on-device model served by Ollama (id `ollama/<name>`, default `ollama/qwen2.5:3b-instruct`).
-The others are OpenAI models configured with `PANINI_CLI_ROUTER_MODELS` (`id:tier:description,…`).
+The others are OpenAI models configured with `PANINI_CLI_ROUTER_MODELS` (`id:tier:description,…`); the defaults are
+`gpt-5.6-luna` (cheap), `gpt-5.6-terra` (balanced) and `gpt-5.6-sol` (strong).
+
+**The local tier only answers questions.** In the first paired eval (`evals/results/20261001-232423.md`) the 3B model
+solved 0/10 tasks when pinned, narrated tool calls instead of making them, and once reported a rename it never made.
+Since then, any request that asks to modify something (rename, fix, add, write, update, …) skips the local tier.
 Tiers with no configured model are skipped: the router picks the cheapest available model at or above the tier it wants.
 
 Available options are computed on every route:
@@ -17,13 +22,14 @@ Available options are computed on every route:
 | Ollama up, model pulled, OpenAI key set | local + cloud tiers |
 | No OpenAI key | local only (`only-model`) |
 | Ollama down / model missing / `PANINI_CLI_LOCAL=off` | cloud tiers only |
+| Local tier failing here (see *Learning*) | cloud tiers only, until the failures age out |
 | Neither | `no-models-available` (the session refuses to start) |
 
 Ollama is probed with a 0.5 s timeout and the result is cached for 20 s, so routing never stalls on a dead server.
 
 ## Deciding
 
-1. **Override.** "use qwen", "use local", "switch to gpt-4.1-mini", a tier name, or an exact model id wins.
+1. **Override.** "use qwen", "use local", "switch to gpt-5.6-terra", a tier name, or an exact model id wins.
 2. **Jev** (if `AI_GATEWAY_API_KEY` is set and the sidecar is installed): one boolean question per model,
    *"should PANINI CLI use this model for this request?"*. The highest probability wins; ties go to the cheaper tier.
 3. **Offline estimate** (Jev unavailable, timed out, or errored): [`complexity.py`](../src/panini_cli/agent/complexity.py) scores the
@@ -74,3 +80,28 @@ function calls, which OpenAI accepts, so a task can move from local to cloud wit
 - Keep everything cloud: `PANINI_CLI_LOCAL=off`. Keep everything local: `--model local`.
 - Change what counts as "simple": edit the word lists and thresholds in `complexity.py`; `tests/test_complexity.py` documents the intent.
 - Watch decisions with `panini-cli route "…"` and the `Model selected:` line printed each turn.
+
+## Local turns that cannot be trusted
+
+Besides errors, unknown tools, malformed arguments and empty replies, two behaviours seen in the eval make a local
+turn count as failed:
+
+- **Narrating instead of acting**: a short reply like "I need to search calc.py…" with no tool call.
+- **Claiming unmade changes**: a final answer such as "the function has been renamed" when no file changed during
+  the turn. That answer is removed from the history before the cloud model redoes the request.
+
+With `PANINI_CLI_LOCAL_STRONG_MODEL` (for example `qwen2.5:7b-instruct-q4_K_M`), a failed small-model turn first retries
+on that bigger local model, and only then escalates to the cloud.
+
+## Learning
+
+Every turn is recorded in the usage ledger (`usage.jsonl` in PANINI's data folder) with the model it started on, the
+model it finished on and its status. Over the last 14 days, if at least 5 turns started on the local model and more
+than 40 % of them escalated or failed, the router stops offering the local tier. It returns by itself as those turns
+age out. `panini-cli models` shows the current record.
+
+## Local scouts
+
+A cloud model chosen by the router also gets an `explore` tool: a read-only sub-agent on the local model searches and
+reads the workspace and returns a short `path:line` report. The cloud model then reads only the lines it needs. Scout
+reports are labelled unverified. `PANINI_CLI_EXPLORE=0` turns this off.

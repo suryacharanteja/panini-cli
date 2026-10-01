@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "panini-cli"
-version = "1.1.0"
-description = "PANINI-CLI: a local-first terminal coding agent that routes each task to Ollama or OpenAI through Jev"
+dynamic = ["version"]
+description = "PANINI CLI: a cost-aware terminal coding agent that routes each task between a local Ollama model and OpenAI"
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.12"
@@ -21,6 +21,7 @@ dependencies = [
   "httpx>=0.27",
   "python-dotenv>=1.0",
   "rich>=13.0",
+  "prompt_toolkit>=3.0",
   "flatbuffers>=25.12.19",
 ]
 
@@ -34,6 +35,9 @@ panini-engine = "panini_cli.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.dynamic]
+version = { attr = "panini_cli.agent.VERSION" }
 
 [tool.setuptools.package-data]
 "panini_cli.jev" = ["sidecar/*.mjs", "sidecar/package.json"]

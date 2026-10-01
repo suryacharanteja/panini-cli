@@ -49,6 +49,8 @@ ENV_KEYS = {
     "web_search": "PANINI_CLI_WEB_SEARCH",
     "auto_verify": "PANINI_CLI_AUTO_VERIFY",
     "explore": "PANINI_CLI_EXPLORE",
+    "local_strong_model": "PANINI_CLI_LOCAL_STRONG_MODEL",
+    "checkpoints": "PANINI_CLI_CHECKPOINTS",
 }
 
 TEMPLATE = '''# PANINI CLI settings. Environment variables and command-line flags override these.

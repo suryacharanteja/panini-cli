@@ -1,0 +1,82 @@
+[
+  {
+    "id": "explain-add",
+    "kind": "question",
+    "prompt": "What does the add() function in calc.py actually return? Answer in one sentence.",
+    "files": {"calc.py": "def add(a, b):\n    return a - b\n"},
+    "answer_regex": "a\\s*-\\s*b|difference|subtract"
+  },
+  {
+    "id": "count-lines",
+    "kind": "question",
+    "prompt": "How many lines does NOTES.md have? Reply with just the number.",
+    "files": {"NOTES.md": "one\ntwo\nthree\nfour\nfive\nsix\nseven\n"},
+    "answer_regex": "\\b7\\b"
+  },
+  {
+    "id": "fix-add",
+    "kind": "change",
+    "prompt": "add() in calc.py subtracts instead of adding. Fix it.",
+    "files": {"calc.py": "def add(a, b):\n    return a - b\n"},
+    "check": "python -c \"import calc; assert calc.add(2, 3) == 5; assert calc.add(-1, 1) == 0\""
+  },
+  {
+    "id": "fizzbuzz",
+    "kind": "change",
+    "prompt": "Implement fizzbuzz(n) in fb.py as described in its docstring.",
+    "files": {"fb.py": "def fizzbuzz(n):\n    \"\"\"Return 'Fizz' for multiples of 3, 'Buzz' for multiples of 5, 'FizzBuzz' for both, else str(n).\"\"\"\n    raise NotImplementedError\n"},
+    "check": "python -c \"from fb import fizzbuzz as f; assert [f(i) for i in (1,3,5,15,7)] == ['1','Fizz','Buzz','FizzBuzz','7']\""
+  },
+  {
+    "id": "pagination-off-by-one",
+    "kind": "change",
+    "prompt": "page(items, number, size) in paging.py should return the 1-based page `number`, but page 1 is skipping the first item. Fix the bug.",
+    "files": {"paging.py": "def page(items, number, size):\n    start = number * size - size + 1\n    return items[start:start + size]\n"},
+    "check": "python -c \"from paging import page; xs=list(range(10)); assert page(xs,1,3)==[0,1,2]; assert page(xs,4,3)==[9]\""
+  },
+  {
+    "id": "parse-config",
+    "kind": "change",
+    "prompt": "Implement parse(text) in conf.py: it takes the contents of a key=value file and returns a dict. Ignore blank lines and lines starting with #, strip whitespace around keys and values, and keep '=' characters that appear inside values.",
+    "files": {"conf.py": "def parse(text):\n    raise NotImplementedError\n"},
+    "check": "python -c \"from conf import parse; assert parse('# c\\n a = 1 \\n\\nurl=http://x?a=b\\n') == {'a': '1', 'url': 'http://x?a=b'}\""
+  },
+  {
+    "id": "slugify-failing-test",
+    "kind": "change",
+    "prompt": "The test in test_text.py fails. Find the bug in text.py and fix it so the test passes. Do not change the test.",
+    "files": {
+      "text.py": "import re\n\n\ndef slugify(title):\n    title = title.lower().strip()\n    title = re.sub(r'[^a-z0-9]+', '-', title)\n    return title\n",
+      "test_text.py": "from text import slugify\n\n\ndef test_slugify():\n    assert slugify('  Hello, World!  ') == 'hello-world'\n    assert slugify('PANINI CLI 2.0') == 'panini-cli-2-0'\n"
+    },
+    "check": "python -m pytest -q test_text.py"
+  },
+  {
+    "id": "rename-across-files",
+    "kind": "change",
+    "prompt": "Rename the function get_usr to get_user everywhere in this project (definition and all call sites).",
+    "files": {
+      "users.py": "def get_usr(user_id):\n    return {'id': user_id}\n",
+      "app.py": "from users import get_usr\n\n\ndef main():\n    return get_usr(1)\n",
+      "report.py": "import users\n\n\ndef first():\n    return users.get_usr(0)\n"
+    },
+    "check": "python -c \"import app, report, users; assert app.main()=={'id':1}; assert report.first()=={'id':0}; assert not hasattr(users,'get_usr')\""
+  },
+  {
+    "id": "extract-constant",
+    "kind": "change",
+    "prompt": "The timeout value 30 is duplicated in client.py and server.py. Move it into a new settings.py as TIMEOUT_SECONDS and import it in both files.",
+    "files": {
+      "client.py": "def connect():\n    timeout = 30\n    return ('client', timeout)\n",
+      "server.py": "def listen():\n    timeout = 30\n    return ('server', timeout)\n"
+    },
+    "check": "python -c \"import settings, client, server, pathlib; assert settings.TIMEOUT_SECONDS == 30; assert client.connect()[1] == 30 and server.listen()[1] == 30; assert '30' not in pathlib.Path('client.py').read_text() + pathlib.Path('server.py').read_text()\""
+  },
+  {
+    "id": "add-tests",
+    "kind": "change",
+    "prompt": "Write pytest tests for is_leap(year) in dates.py in a new file test_dates.py, covering century and 400-year rules. Run them.",
+    "files": {"dates.py": "def is_leap(year):\n    return year % 4 == 0 and (year % 100 != 0 or year % 400 == 0)\n"},
+    "check": "python -c \"import pathlib,sys; t=pathlib.Path('test_dates.py').read_text(); assert '1900' in t or '2100' in t; assert '2000' in t or '1600' in t\" && python -m pytest -q test_dates.py"
+  }
+]

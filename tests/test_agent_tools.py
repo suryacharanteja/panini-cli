@@ -103,7 +103,8 @@ def test_search_code_jev_reranks_without_dropping_matches(ws):
 
     result = json.loads(tools.search_code(ws, "add", selector=selector))
     assert len(observed) == len(result["results"]) == 2
-    assert result["results"][0]["path"] == "src/app.py"
+    # The selector reversed the lexical order: its last candidate is now first.
+    assert result["results"][0]["path"] == observed[-1][1]
     assert result["selection"]["mode"] == "jev"
     assert result["selection"]["role"] == "evaluator_rerank_only"
     assert result["selection"]["input_tokens"] == 12
