@@ -28,7 +28,16 @@
 
 Same ten tasks, same test oracle, fresh git repo per task ([`evals/`](evals/)):
 
-EVAL_TABLE
+| Arm (v2.0.0, 2026-10-02) | Solved | Cloud cost | Cost per solve | Mean time |
+| --- | ---: | ---: | ---: | ---: |
+| **`auto`** (routed: local → luna → terra) | **10/10** | **$0.226** | **$0.023** | 24.2 s |
+| pinned `gpt-5.6-terra` | 10/10 | $0.462 | $0.046 | 19.1 s |
+
+Routing halved the cost per solve on this set, at about 5 s more per task. Ten small tasks is a small sample, and the
+first run looked very different: `auto` 5/10 vs Terra 8/10, with the 3B local model solving 0/10 on its own and once
+claiming an edit it never made. That run is why the local tier now only answers questions, and why local answers that
+narrate, guess about unread files, or claim unmade changes are redone in the cloud. Both runs are kept in
+[`evals/results/`](evals/results/).
 
 Per-task results are in [`evals/results/`](evals/results/). Codex CLI was not installed on the test machine, so it has not
 been compared yet; the harness supports it (`--arm codex`). Run it on your own tasks before trusting any number here.

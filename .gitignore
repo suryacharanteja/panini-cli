@@ -10,4 +10,4 @@ dist/
 node_modules/
 build/
 *.spec
-evals/results/*.json
+
