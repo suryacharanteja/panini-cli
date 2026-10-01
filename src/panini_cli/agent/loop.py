@@ -1,0 +1,653 @@
+"""The agent loop: model responses, tool calls, approvals, interruption and a bounded context.
+
+A host presents the work: the terminal CLI prints it and asks y/N; the app-server
+forwards it to PANINI, whose coordinator asks the user. The loop never applies a
+change or runs a command without the host's "accept".
+"""
+
+import asyncio
+import json
+from dataclasses import dataclass, field
+from typing import Protocol
+from uuid import uuid4
+
+from . import codex_sandbox, intent, jev_selector, model_router, native_sandbox, patch, receipts, sandbox, tools
+from .hooks import NoHooks
+from .model import ModelError
+from .prompt import instructions
+from .shell import run_command
+from .terminals import Terminals
+
+DECLINED = "The user declined this action. Do not repeat it unchanged; adjust your approach or ask the user."
+SKIPPED = "Not run: the user declined an earlier action in the same step."
+INTERRUPTED = "Not completed: the user interrupted the task."
+OMITTED = "[Earlier tool output removed to fit the context window.]"
+KEEP_RECENT_OUTPUTS = 6
+OMITTED_ARGUMENTS = '{"omitted": "Earlier tool arguments removed to fit the context window."}'
+# Tools with no approval and no side effects: consecutive calls to them run concurrently.
+READ_TOOLS = frozenset({"read_file", "list_files", "search_files", "search_code"})
+
+
+class Host(Protocol):
+    async def started(self, item: dict) -> None: ...
+    async def delta(self, item_id: str, kind: str, text: str) -> None: ...
+    async def completed(self, item: dict) -> None: ...
+    async def approve(self, item: dict) -> str: ...  # "accept", "decline" or "cancel"
+
+
+class Cancelled(Exception):
+    """The host cancelled the whole turn at an approval prompt."""
+
+
+@dataclass
+class TurnResult:
+    status: str  # completed, interrupted, failed or incomplete
+    text: str = ""
+    error: str = ""
+    usage: dict = field(default_factory=dict)
+    steps: int = 0
+
+
+def _item_id(kind):
+    return f"{kind}_{uuid4().hex[:12]}"
+
+
+def _add_usage(total, usage):
+    for key in ("input_tokens", "output_tokens", "total_tokens"):
+        total[key] = total.get(key, 0) + int(usage.get(key) or 0)
+
+
+def _clip(text, head=4000, tail=6000):
+    if len(text) <= head + tail:
+        return text
+    return f"{text[:head]}\n…[{len(text) - head - tail:,} characters omitted]…\n{text[-tail:]}"
+
+
+def describe(tool, arguments):
+    """A short, human-readable account of a read-only tool call."""
+    path = arguments.get("path") or "."
+    if tool == "read_file":
+        start, end = arguments.get("start_line") or 1, arguments.get("end_line")
+        span = "" if start == 1 and (not end or end >= 1000) else f" (lines {start}-{end or 'end'})"
+        return f"Read {path}{span}"
+    if tool == "list_files":
+        return f"List {path}"
+    if tool == "search_files":
+        glob = f" [{arguments['glob']}]" if arguments.get("glob") else ""
+        return f"Search /{arguments.get('pattern', '')}/ in {path}{glob}"
+    if tool == "search_code":
+        return f"Find code for {arguments.get('query', '')[:80]} in {path}"
+    return tool
+
+
+def command_scope(arguments):
+    scope = arguments.get("scope") or "workspace"
+    if scope not in ("workspace", "host"):
+        raise tools.ToolError("scope must be workspace or host.")
+    return scope
+
+
+class Agent:
+    def __init__(self, workspace, model, settings, host, *, developer_instructions="", hooks=None):
+        self.workspace = tools.Workspace(workspace)
+        self.model, self.settings, self.host = model, settings, host
+        self.instructions = instructions(
+            self.workspace.root, extra=developer_instructions, sandbox=settings.sandbox
+        )
+        self.items = []
+        self.plan = []
+        self.hooks = hooks or NoHooks()
+        self.terminals = Terminals(self.workspace.root, settings)
+        self.started_session = False
+        self._routed_user = -2  # Index of the user message the model was last routed for.
+        # Applied file changes per turn, newest last: [(path, label, before, after)].
+        self.changes = []
+        self.cache_key = f"panini-cli-{uuid4().hex}"
+        self.usage = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
+        self.last_input_tokens = 0  # As reported by the provider for the latest request.
+        self.session_id = uuid4().hex
+        self._receipt = None
+        self._receipt_id = None
+        self._active_call_id = None
+        self._active_tool = None
+        self._active_sandbox = None
+
+    def _receipt_log(self):
+        if self._receipt_id != self.session_id:
+            self._receipt = receipts.ReceiptLog(self.session_id, self.workspace.root)
+            self._receipt_id = self.session_id
+        return self._receipt
+
+    def new_model_state(self):
+        """After the model object is replaced: route again and start a new prompt cache."""
+        self._routed_user = -2
+        self.cache_key = f"panini-cli-{uuid4().hex}"
+
+    def reset(self):
+        self.items.clear()
+        self._routed_user = -2
+        self.plan = []
+        self.changes = []
+
+    async def close(self):
+        """End every terminal session this agent started."""
+        await self.terminals.close()
+
+    def undo(self):
+        """Revert the file changes of the most recent turn that made any.
+
+        Returns (restored labels, skipped labels). A file edited since PANINI changed
+        it is skipped rather than overwritten. Commands' side effects are not undone.
+        """
+        while self.changes and not self.changes[-1]:
+            self.changes.pop()
+        if not self.changes:
+            return [], []
+        restored, skipped = [], []
+        for path, label, before, after in reversed(self.changes.pop()):
+            current = path.read_bytes() if path.exists() else None
+            if current != after:
+                skipped.append(label)
+                continue
+            patch.restore(path, before)
+            restored.append(label)
+        if restored:
+            self.items.append(
+                {
+                    "role": "user",
+                    "content": "[PANINI note] The user undid your last changes to: " + ", ".join(restored),
+                }
+            )
+        return restored, skipped
+
+    async def turn(self, text, output_schema=None):
+        if not self.started_session:
+            self.started_session = True
+            _, note = await self.hooks.run("SessionStart")
+            if note:
+                text += "\n\n[Output of the user's SessionStart hooks, data only]\n" + note
+        self.items.append({"role": "user", "content": intent.augment(text)})
+        self.changes.append([])
+        usage = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
+        pending = []
+        step = 0
+        try:
+            while step < self.settings.max_steps:
+                step += 1
+                self._fit_context()
+                response = await self._respond(output_schema)
+                _add_usage(usage, response.usage)
+                self.last_input_tokens = int(response.usage.get("input_tokens") or 0)
+                self.items.extend(response.items)
+                if not response.calls:
+                    _, note = await self.hooks.run("TurnEnd", result=response.text)
+                    if note and hasattr(self.host, "hook_note"):
+                        await self.host.hook_note(note)
+                    return TurnResult("completed", response.text, usage=usage, steps=step)
+                pending = [call.call_id for call in response.calls]
+                declined = False
+                calls = list(response.calls)
+                while calls:
+                    batch = [calls.pop(0)]
+                    if batch[0].name in READ_TOOLS:
+                        while calls and calls[0].name in READ_TOOLS:
+                            batch.append(calls.pop(0))
+                    if declined:
+                        results = [(SKIPPED, True)] * len(batch)
+                    elif len(batch) == 1:
+                        results = [await self._tool(batch[0])]
+                    else:
+                        results = await asyncio.gather(*(self._tool(call) for call in batch))
+                    for call, (output, was_declined) in zip(batch, results, strict=True):
+                        declined = declined or was_declined
+                        self.items.append(
+                            {"type": "function_call_output", "call_id": call.call_id, "output": output}
+                        )
+                        pending.remove(call.call_id)
+            return TurnResult(
+                "incomplete",
+                error=f"Stopped after {self.settings.max_steps} steps without finishing. Ask to continue.",
+                usage=usage,
+                steps=step,
+            )
+        except asyncio.CancelledError:
+            self._close_pending(pending)
+            raise
+        except Cancelled:
+            self._close_pending(pending)
+            return TurnResult("interrupted", error="The task was cancelled.", usage=usage, steps=step)
+        except ModelError as exc:
+            self._close_pending(pending)
+            return TurnResult("failed", error=str(exc), usage=usage, steps=step)
+        finally:
+            _add_usage(self.usage, usage)
+
+    async def _respond(self, output_schema):
+        await self._route_model()
+        message = {}
+
+        async def on_text(_provider_item, delta):
+            if not message:
+                message.update(id=_item_id("message"), type="agentMessage", text="", status="inProgress")
+                await self.host.started(dict(message))
+            await self.host.delta(message["id"], "agentMessage", delta)
+
+        response = await self.model.respond(
+            self.instructions,
+            self.items,
+            tools.TOOLS,
+            on_text=on_text,
+            output_schema=output_schema,
+            cache_key=self.cache_key,
+        )
+        if response.text and not message:
+            message.update(id=_item_id("message"), type="agentMessage", text="", status="inProgress")
+            await self.host.started(dict(message))
+        if message:
+            await self.host.completed({**message, "text": response.text, "status": "completed"})
+        return response
+
+    async def _route_model(self):
+        if not model_router.enabled(self.settings.model) or not hasattr(self.model, "switch_model"):
+            return
+        # Route once per user message. Tool-result steps stay on the chosen model so a task never
+        # bounces between backends mid-flight; the only mid-task move is a local -> cloud escalation.
+        last_user = max(
+            (index for index, item in enumerate(self.items) if isinstance(item, dict) and item.get("role") == "user"),
+            default=-1,
+        )
+        escalation = getattr(self.model, "escalation", None)
+        if escalation:
+            self.model.escalation = None
+            self.cache_key = f"panini-cli-{uuid4().hex}"
+            if hasattr(self.host, "model_route"):
+                reason = f"escalated: {escalation}"
+                await self.host.model_route(model_router.RouteDecision(self.model.model, reason, True))
+        if last_user == self._routed_user:
+            return
+        self._routed_user = last_user
+        prompt = str(self.items[last_user].get("content", "")) if last_user >= 0 else ""
+        current = getattr(self.model, "model", model_router.fallback_model())
+        context_tokens = max(0, sum(len(json.dumps(item, ensure_ascii=False)) for item in self.items) // 4)
+        allow_local = not getattr(self.model, "local_blocked", False)
+        try:
+            decision = await asyncio.to_thread(
+                model_router.route, prompt, current, context_tokens, allow_local=allow_local
+            )
+        except Exception as exc:  # noqa: BLE001 -- model routing must never block the CLI.
+            decision = model_router.RouteDecision(current, f"router-error:{str(exc)[:120]}", False)
+        if decision.changed:
+            self.model.switch_model(decision.model)
+            self.cache_key = f"panini-cli-{uuid4().hex}"
+        if hasattr(self.host, "model_route"):
+            await self.host.model_route(decision)
+
+    def _close_pending(self, pending):
+        # Every function call needs an output, or the next request would be rejected.
+        for call_id in pending:
+            self.items.append({"type": "function_call_output", "call_id": call_id, "output": INTERRUPTED})
+        pending.clear()
+
+    def _fit_context(self):
+        budget = self.settings.context_tokens * 4  # Roughly four characters per token.
+        size = sum(len(json.dumps(item, ensure_ascii=False)) for item in self.items)
+        if size <= budget:
+            return
+        outputs = [item for item in self.items if item.get("type") == "function_call_output"]
+        for item in outputs[:-KEEP_RECENT_OUTPUTS]:
+            if item["output"] != OMITTED:
+                size -= len(item["output"]) - len(OMITTED)
+                item["output"] = OMITTED
+                if size <= budget:
+                    return
+        calls = [item for item in self.items if item.get("type") == "function_call"]
+        for item in calls[:-KEEP_RECENT_OUTPUTS]:
+            arguments = item.get("arguments") or ""
+            if len(arguments) > 2000:
+                size -= len(arguments) - len(OMITTED_ARGUMENTS)
+                item["arguments"] = OMITTED_ARGUMENTS
+                if size <= budget:
+                    return
+
+    async def _tool(self, call):
+        """Returns (output for the model, whether the user declined), with hooks around it."""
+        receipt = self._receipt_log()
+        try:
+            proposed = json.loads(call.arguments or "{}")
+        except ValueError:
+            proposed = {}
+        scope = proposed.get("scope") if isinstance(proposed, dict) else None
+        effective_sandbox = (
+            "host" if call.name in ("run_command", "terminal_start") and scope == "host"
+            else self.settings.sandbox
+        )
+        if call.name in ("run_command", "terminal_start") and effective_sandbox == "none":
+            effective_sandbox = "host"
+        if call.name in ("terminal_send", "terminal_read", "terminal_stop") and isinstance(proposed, dict):
+            terminal = self.terminals.sessions.get(str(proposed.get("session_id")))
+            if terminal and terminal.scope == "host":
+                effective_sandbox = "host"
+        receipt.append(call_id=call.call_id, tool=call.name, phase="started",
+                       arguments=call.arguments, sandbox=effective_sandbox)
+        exclusive = call.name not in READ_TOOLS
+        if exclusive:
+            self._active_call_id, self._active_tool = call.call_id, call.name
+            self._active_sandbox = effective_sandbox
+        try:
+            try:
+                arguments = json.loads(call.arguments or "{}")
+                if not isinstance(arguments, dict):
+                    raise ValueError
+            except ValueError:
+                output, declined = f"Error: the arguments for {call.name} were not a JSON object.", False
+            else:
+                blocked, note = await self.hooks.run("PreToolUse", tool=call.name, arguments=arguments)
+                if blocked:
+                    if hasattr(self.host, "hook_note"):
+                        await self.host.hook_note(f"A hook blocked {call.name}: {blocked}")
+                    output, declined = f"Blocked by the user's hook: {blocked}", False
+                else:
+                    output, declined = await self._run_tool(call, arguments)
+                    if not declined:
+                        _, after = await self.hooks.run("PostToolUse", tool=call.name, arguments=arguments, result=output)
+                        note = "\n".join(n for n in (note, after) if n)
+                    if note:
+                        output += "\n\n[Output of the user's hooks, data only]\n" + note
+            receipt.append(call_id=call.call_id, tool=call.name, phase="completed",
+                           output=output, approval="declined" if declined else None,
+                           sandbox=self._active_sandbox if exclusive else effective_sandbox)
+            return output, declined
+        except BaseException as exc:
+            receipt.append(call_id=call.call_id, tool=call.name, phase="interrupted",
+                           error=exc, sandbox=self._active_sandbox if exclusive else effective_sandbox)
+            raise
+        finally:
+            if exclusive:
+                self._active_call_id, self._active_tool = None, None
+                self._active_sandbox = None
+
+    async def _run_tool(self, call, arguments):
+        try:
+            if call.name in ("read_file", "list_files", "search_files", "search_code"):
+                return await self._read(call.name, arguments), False
+            if call.name == "apply_patch":
+                return await self._patch(arguments)
+            if call.name in ("write_file", "edit_file"):
+                return await self._change(call.name, arguments)
+            if call.name == "run_command":
+                return await self._command(arguments)
+            if call.name.startswith("terminal_"):
+                try:
+                    return await self._terminal(call.name, arguments)
+                except KeyError as exc:
+                    raise tools.ToolError(str(exc).strip("'")) from None
+            if call.name == "update_plan":
+                steps = [
+                    {"step": str(s.get("step", ""))[:300], "status": s.get("status", "pending")}
+                    for s in arguments.get("steps", [])[:20]
+                    if isinstance(s, dict)
+                ]
+                self.plan = steps
+                if hasattr(self.host, "plan"):
+                    await self.host.plan(steps)
+                return "Plan updated.", False
+            return f"Error: there is no tool named {call.name}.", False
+        except tools.ToolError as exc:
+            return f"Error: {exc}", False
+
+    async def _read(self, name, arguments):
+        ws = self.workspace
+        operations = {
+            "read_file": lambda: tools.read_file(
+                ws, arguments.get("path"), arguments.get("start_line"), arguments.get("end_line")
+            ),
+            "list_files": lambda: tools.list_files(ws, arguments.get("path"), arguments.get("depth")),
+            "search_files": lambda: tools.search_files(
+                ws,
+                arguments.get("pattern") or "",
+                arguments.get("path"),
+                arguments.get("glob"),
+                arguments.get("case_sensitive"),
+            ),
+            "search_code": lambda: tools.search_code(
+                ws,
+                arguments.get("query") or "",
+                arguments.get("path"),
+                arguments.get("glob"),
+                arguments.get("max_results"),
+                selector=jev_selector.select if jev_selector.enabled() else None,
+            ),
+        }
+        item = {
+            "id": _item_id("tool"),
+            "type": "dynamicToolCall",
+            "tool": name,
+            "arguments": arguments,
+            "summary": describe(name, arguments),
+            "status": "inProgress",
+        }
+        await self.host.started(item)
+        try:
+            result = await asyncio.to_thread(operations[name])
+        except (tools.ToolError, OSError) as exc:
+            await self.host.completed({**item, "status": "failed", "error": str(exc)})
+            raise tools.ToolError(str(exc)) from None
+        await self.host.completed({**item, "status": "completed", "result": result.splitlines()[0][:300]})
+        return result
+
+    async def _approve(self, item):
+        decision = await self.host.approve(item)
+        self._receipt_log().append(call_id=self._active_call_id or item["id"],
+                                   tool=self._active_tool or item["type"], phase="approval",
+                                   approval=decision, sandbox=self._active_sandbox or self.settings.sandbox)
+        if decision == "cancel":
+            await self.host.completed({**item, "status": "declined"})
+            raise Cancelled()
+        if decision != "accept":
+            await self.host.completed({**item, "status": "declined"})
+            return False
+        return True
+
+    async def _change(self, name, arguments):
+        ws = self.workspace
+        if name == "write_file":
+            change = await asyncio.to_thread(
+                tools.prepare_write, ws, arguments.get("path"), arguments.get("content")
+            )
+        else:
+            change = await asyncio.to_thread(
+                tools.prepare_edit,
+                ws,
+                arguments.get("path"),
+                arguments.get("old_text"),
+                arguments.get("new_text"),
+                arguments.get("replace_all"),
+            )
+        item = {
+            "id": _item_id("change"),
+            "type": "fileChange",
+            "changes": [{"path": change.label, "kind": {"type": change.kind}, "diff": change.diff}],
+            "status": "inProgress",
+        }
+        await self.host.started(item)
+        if not await self._approve(item):
+            return DECLINED, True
+        try:
+            await asyncio.to_thread(tools.apply_change, change)
+        except (tools.ToolError, OSError) as exc:
+            await self.host.completed({**item, "status": "failed", "error": str(exc)})
+            return f"Error: {exc}", False
+        self._record([change])
+        await self.host.completed({**item, "status": "completed"})
+        verb = "Created" if change.kind == "add" else "Updated"
+        return f"{verb} {change.label} (+{change.added} -{change.removed} lines).", False
+
+    async def _terminal(self, name, arguments):
+        sessions = self.terminals
+        if name == "terminal_read":
+            text = await sessions.read(str(arguments.get("session_id")), arguments.get("wait_seconds") or 2)
+            terminal = sessions.get(str(arguments.get("session_id")))
+            state = "running" if terminal.running else f"ended with exit code {terminal.process.returncode}"
+            return f"Session {terminal.id} ({state}). New output:\n{text or '(none)'}", False
+        if name == "terminal_stop":
+            code = await sessions.stop(str(arguments.get("session_id")))
+            return f"Stopped (exit code {code}).", False
+        if name == "terminal_start":
+            command = arguments.get("command")
+            if not isinstance(command, str) or not command.strip():
+                raise tools.ToolError("command must be a non-empty string.")
+            scope = command_scope(arguments)
+            if self.settings.sandbox == "none":
+                scope = "host"
+            label = command
+        else:
+            session_id, text = str(arguments.get("session_id")), arguments.get("input")
+            if not isinstance(text, str):
+                raise tools.ToolError("input must be text.")
+            try:
+                terminal = sessions.get(session_id)
+            except KeyError as exc:
+                raise tools.ToolError(str(exc).strip("'")) from None
+            scope = terminal.scope
+            self._active_sandbox = "host" if scope == "host" else self.settings.sandbox
+            label = f"[session {session_id}] input: {text}"
+        item = {
+            "id": _item_id("command"),
+            "type": "commandExecution",
+            "command": label,
+            "cwd": str(self.workspace.root),
+            "executionScope": scope,
+            "status": "inProgress",
+        }
+        await self.host.started(item)
+        if not await self._approve(item):
+            return DECLINED, True
+        try:
+            if scope == "host":
+                native_sandbox.invalidate_link_scan(self.workspace.root)
+            if name == "terminal_start":
+                terminal = await sessions.start(command, scope=scope)
+                session_id = terminal.id
+            else:
+                await sessions.send(session_id, text)
+        except (OSError, KeyError, RuntimeError) as exc:
+            await self.host.completed({**item, "status": "failed", "exitCode": None, "error": str(exc)})
+            return f"Error: {exc}", False
+        output = await sessions.read(session_id, arguments.get("wait_seconds") or 2)
+        terminal = sessions.get(session_id)
+        await self.host.completed(
+            {
+                **item,
+                "status": "completed",
+                "exitCode": None if terminal.running else terminal.process.returncode,
+                "aggregatedOutput": output[-20000:],
+                "durationMs": 0,
+            }
+        )
+        state = "running" if terminal.running else f"ended with exit code {terminal.process.returncode}"
+        return f"Session {session_id} ({state}). Output:\n{output or '(none yet)'}", False
+
+    def _record(self, changes):
+        if not self.changes:
+            self.changes.append([])
+        self.changes[-1].extend((c.path, c.label, c.before, c.after) for c in changes)
+
+    async def _patch(self, arguments):
+        changes = await asyncio.to_thread(patch.prepare, self.workspace, arguments.get("patch"))
+        item = {
+            "id": _item_id("change"),
+            "type": "fileChange",
+            "changes": [{"path": c.label, "kind": {"type": c.kind}, "diff": c.diff} for c in changes],
+            "status": "inProgress",
+        }
+        await self.host.started(item)
+        if not await self._approve(item):
+            return DECLINED, True
+        try:
+            await asyncio.to_thread(patch.apply, changes)
+        except (tools.ToolError, OSError) as exc:
+            await self.host.completed({**item, "status": "failed", "error": str(exc)})
+            return f"Error: {exc} No file was changed.", False
+        self._record(changes)
+        await self.host.completed({**item, "status": "completed"})
+        summary = ", ".join(f"{c.kind} {c.label} (+{c.added} -{c.removed})" for c in changes)
+        return f"Applied the patch: {summary}.", False
+
+    async def _command(self, arguments):
+        command = arguments.get("command")
+        if not isinstance(command, str) or not command.strip():
+            raise tools.ToolError("command must be a non-empty string.")
+        scope = command_scope(arguments)
+        mode = "none" if scope == "host" else self.settings.sandbox
+        if mode == "none":
+            scope = "host"
+        requested = arguments.get("timeout_seconds") or self.settings.command_timeout
+        timeout = max(5, min(int(requested), 600))
+        item = {
+            "id": _item_id("command"),
+            "type": "commandExecution",
+            "command": command,
+            "cwd": str(self.workspace.root),
+            "executionScope": scope,
+            "status": "inProgress",
+        }
+        await self.host.started(item)
+        if not await self._approve(item):
+            return DECLINED, True
+
+        async def on_output(text):
+            await self.host.delta(item["id"], "commandExecution", text)
+
+        container = None
+        argv = None
+        if mode == "docker":
+            container = sandbox.new_name()
+            argv = sandbox.argv(command, self.workspace.root, name=container)
+        elif mode == "codex":
+            try:
+                argv = codex_sandbox.argv(command, self.workspace.root)
+            except RuntimeError as exc:
+                raise tools.ToolError(str(exc)) from None
+        try:
+            if mode == "native":
+                result = await native_sandbox.run_command(
+                    command,
+                    self.workspace.root,
+                    timeout,
+                    on_output,
+                )
+            else:
+                result = await run_command(
+                    command,
+                    self.workspace.root,
+                    timeout,
+                    on_output,
+                    environ=sandbox.environment() if container else None,
+                    argv=argv,
+                )
+        except OSError as exc:
+            await self.host.completed({**item, "status": "failed", "exitCode": None, "error": str(exc)})
+            return f"Error: the command could not start: {exc}", False
+        finally:
+            if container:
+                await asyncio.to_thread(sandbox.remove, container)
+            if scope == "host":
+                native_sandbox.invalidate_link_scan(self.workspace.root)
+        await self.host.completed(
+            {
+                **item,
+                "status": "completed" if result.exit_code == 0 else "failed",
+                "exitCode": result.exit_code,
+                "aggregatedOutput": result.output[-20000:],
+                "durationMs": int(result.duration * 1000),
+            }
+        )
+        status = (
+            f"Timed out after {timeout}s; the command and its child processes were stopped."
+            if result.timed_out
+            else f"Exit code: {result.exit_code}"
+        )
+        return (
+            f"{status}\nDuration: {result.duration:.1f}s\nOutput:\n{_clip(result.output) or '(no output)'}",
+            False,
+        )

@@ -1,0 +1,14 @@
+[
+  {
+    "calls": [
+      {
+        "name": "run_command",
+        "arguments": {
+          "command": "Write-Output PANINI_NATIVE_PACKAGED_SMOKE",
+          "timeout_seconds": 15
+        }
+      }
+    ]
+  },
+  { "text": "PANINI native packaged smoke completed." }
+]

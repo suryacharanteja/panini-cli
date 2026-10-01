@@ -1,0 +1,9 @@
+{
+  "name": "panini-jev-sidecar",
+  "version": "1.0.0",
+  "type": "module",
+  "private": true,
+  "dependencies": {
+    "ai": "^7.0.105"
+  }
+}

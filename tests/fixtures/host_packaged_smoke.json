@@ -1,0 +1,15 @@
+[
+  {
+    "calls": [
+      {
+        "name": "run_command",
+        "arguments": {
+          "command": "Write-Output PANINI_HOST_PACKAGED_SMOKE",
+          "timeout_seconds": 15,
+          "scope": "host"
+        }
+      }
+    ]
+  },
+  { "text": "PANINI host packaged smoke completed." }
+]
