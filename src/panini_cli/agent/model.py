@@ -258,7 +258,7 @@ class RoutedModel:
 
         try:
             turn = await self._local_backend().respond(instructions, items, tools, watch, output_schema, cache_key)
-            problem = invalid_turn(turn)
+            problem = invalid_turn(turn, tools)
             if problem:
                 raise ModelError(f"the local model gave an unusable turn ({problem})")
             return turn

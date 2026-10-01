@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from typing import Protocol
 from uuid import uuid4
 
-from . import codex_sandbox, intent, jev_selector, model_router, native_sandbox, patch, receipts, sandbox, tools
+from . import codex_sandbox, compaction, intent, jev_selector, model_router, native_sandbox, patch, receipts, sandbox, tools
 from .hooks import NoHooks
 from .model import ModelError
 from .prompt import instructions
@@ -80,6 +80,37 @@ def describe(tool, arguments):
     return tool
 
 
+IMAGE_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp"}
+MAX_IMAGE_BYTES = 10 * 1024 * 1024
+
+
+def image_part(path):
+    """An image attached by the user, as a Responses `input_image` part (a data URL)."""
+    import base64
+    from pathlib import Path
+
+    file = Path(path).expanduser()
+    kind = IMAGE_TYPES.get(file.suffix.lower())
+    if not kind:
+        raise ValueError(f"{file} is not a supported image ({', '.join(IMAGE_TYPES)}).")
+    data = file.read_bytes()
+    if len(data) > MAX_IMAGE_BYTES:
+        raise ValueError(f"{file} is larger than 10 MB.")
+    return {"type": "input_image", "image_url": f"data:{kind};base64,{base64.b64encode(data).decode()}"}
+
+
+def has_image(content):
+    return isinstance(content, list) and any(
+        isinstance(part, dict) and part.get("type") == "input_image" for part in content
+    )
+
+
+def text_of(content):
+    if isinstance(content, list):
+        return " ".join(part.get("text", "") for part in content if isinstance(part, dict))
+    return str(content or "")
+
+
 def command_scope(arguments):
     scope = arguments.get("scope") or "workspace"
     if scope not in ("workspace", "host"):
@@ -117,6 +148,23 @@ class Agent:
             self._receipt = receipts.ReceiptLog(self.session_id, self.workspace.root)
             self._receipt_id = self.session_id
         return self._receipt
+
+    async def compact(self, reason="manual"):
+        """Replace the history with a summary. Returns (tokens before, tokens after, summarizer)."""
+        if not self.items:
+            return None
+        before = compaction.estimate_tokens(self.items, self.last_input_tokens)
+        summary, by = await compaction.summarize(self.items, self.model)
+        if not summary:
+            raise ModelError("the summarizer returned nothing")
+        self.items[:] = compaction.compacted(summary)
+        self.last_input_tokens = 0
+        self._routed_user = -2
+        self.cache_key = f"panini-cli-{uuid4().hex}"
+        after = compaction.estimate_tokens(self.items)
+        if hasattr(self.host, "compacted"):
+            await self.host.compacted(reason, before, after, by)
+        return before, after, by
 
     def new_model_state(self):
         """After the model object is replaced: route again and start a new prompt cache."""
@@ -160,13 +208,22 @@ class Agent:
             )
         return restored, skipped
 
-    async def turn(self, text, output_schema=None):
+    async def turn(self, text, output_schema=None, images=()):
         if not self.started_session:
             self.started_session = True
             _, note = await self.hooks.run("SessionStart")
             if note:
                 text += "\n\n[Output of the user's SessionStart hooks, data only]\n" + note
-        self.items.append({"role": "user", "content": intent.augment(text)})
+        if compaction.should_compact(self.items, self.settings.context_tokens, self.last_input_tokens):
+            try:
+                await self.compact("auto")
+            except ModelError as exc:
+                if hasattr(self.host, "hook_note"):
+                    await self.host.hook_note(f"Context compaction failed ({exc}); older tool output will be trimmed instead.")
+        content = intent.augment(text)
+        if images:
+            content = [{"type": "input_text", "text": content}, *(image_part(path) for path in images)]
+        self.items.append({"role": "user", "content": content})
         self.changes.append([])
         usage = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
         pending = []
@@ -266,10 +323,11 @@ class Agent:
         if last_user == self._routed_user:
             return
         self._routed_user = last_user
-        prompt = str(self.items[last_user].get("content", "")) if last_user >= 0 else ""
+        content = self.items[last_user].get("content", "") if last_user >= 0 else ""
+        prompt = text_of(content)
         current = getattr(self.model, "model", model_router.fallback_model())
         context_tokens = max(0, sum(len(json.dumps(item, ensure_ascii=False)) for item in self.items) // 4)
-        allow_local = not getattr(self.model, "local_blocked", False)
+        allow_local = not getattr(self.model, "local_blocked", False) and not has_image(content)
         try:
             decision = await asyncio.to_thread(
                 model_router.route, prompt, current, context_tokens, allow_local=allow_local

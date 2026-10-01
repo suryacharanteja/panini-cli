@@ -1,6 +1,7 @@
 """The agent's standing instructions: how to work, and what its tools can and cannot do."""
 
 import datetime
+import os
 import platform
 from pathlib import Path
 
@@ -68,13 +69,52 @@ Final answer
     return text
 
 
+NESTED_SKIP = {".git", "node_modules", ".venv", "venv", "__pycache__", "dist", "build", "target"}
+MAX_NESTED = 20
+
+
+def _scope_chain(workspace):
+    """Directories from the repository root (the nearest parent with .git) down to the workspace."""
+    workspace = Path(workspace).resolve()
+    chain = [workspace]
+    for parent in workspace.parents:
+        if (chain[-1] / ".git").exists():
+            break
+        chain.append(parent)
+    else:
+        return [workspace]  # Not inside a repository: only the workspace itself.
+    return list(reversed(chain))
+
+
+def nested_instruction_files(workspace):
+    """AGENTS.md files below the workspace; they apply to files in their directory."""
+    found = []
+    root = Path(workspace).resolve()
+    for directory, dirs, files in os.walk(root):
+        dirs[:] = sorted(d for d in dirs if d not in NESTED_SKIP and not d.startswith("."))
+        if Path(directory) != root and "AGENTS.md" in files:
+            found.append((Path(directory) / "AGENTS.md").relative_to(root).as_posix())
+            if len(found) >= MAX_NESTED:
+                break
+    return found
+
+
 def project_instructions(workspace, limit=32_000):
-    """The workspace's AGENTS.md, plus the user's global one in ~/.panini, within a size limit."""
+    """AGENTS.md files that apply here, general first: ~/.panini, then the repository root down to
+    the workspace (the closest file wins on conflicts). Files deeper in the tree are listed so the
+    agent reads them before working there."""
     parts = []
-    for path in (Path.home() / ".panini" / "AGENTS.md", Path(workspace) / "AGENTS.md"):
+    paths = [Path.home() / ".panini" / "AGENTS.md", *(folder / "AGENTS.md" for folder in _scope_chain(workspace))]
+    for path in dict.fromkeys(paths):
         try:
             if path.is_file():
                 parts.append(f"# {path}\n" + path.read_text(encoding="utf-8", errors="replace").strip())
         except OSError:
             continue
+    nested = nested_instruction_files(workspace)
+    if nested:
+        parts.append(
+            "# Directory-specific AGENTS.md files\nRead the matching file before changing anything in its "
+            "directory; it overrides the files above for that directory:\n" + "\n".join(f"- {p}" for p in nested)
+        )
     return "\n\n".join(parts)[:limit]

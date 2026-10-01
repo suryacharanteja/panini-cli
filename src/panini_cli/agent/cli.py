@@ -17,10 +17,10 @@ import sys
 import time
 from pathlib import Path
 
-from . import VERSION, codex_sandbox, hooks, native_probe, native_sandbox, receipts, sandbox, sessions
+from . import VERSION, approvals, codex_sandbox, userconfig, hooks, native_probe, native_sandbox, receipts, sandbox, sessions
 from .config import DEFAULT_MODEL, EFFORTS, Settings, configured_key, load_panini_env, local_enabled, local_model
-from .loop import Agent
-from .model import create_model
+from .loop import Agent, text_of
+from .model import ModelError, create_model
 from .model_router import actual_model, enabled as model_router_enabled, fallback_model, model_options, routing_options
 from .shell import shell_name
 
@@ -32,7 +32,7 @@ MODES = {
     "edits": "file changes pre-approved, commands ask",
     "auto": "everything pre-approved",
 }
-HELP = "/new starts a new conversation · /plan shows the plan · /undo reverts the last changes · /power enables fast UAT auto-approval · /approvals MODE · /model NAME switches model · /exit quits · Ctrl+C stops the current task"
+HELP = "/new starts a new conversation · /compact summarizes the history · /plan shows the plan · /undo reverts the last changes · /power enables fast UAT auto-approval · /approvals MODE · /model NAME switches model · /exit quits · Ctrl+C stops the current task"
 LOCAL_HELP = "Local commands: auth login · auth status · auth logout · doctor · sandbox status · sessions · receipts SESSION_ID"
 
 WELCOME = r"""
@@ -130,6 +130,8 @@ class TerminalHost:
         self.approve_edits, self.approve_all, self.quiet = approve_edits, approve_all, quiet
         self.read_only = False
         self.open_line = False
+        self.rules = approvals.SessionRules()
+        self.trust_read_only = os.getenv("PANINI_CLI_TRUST_READ_ONLY", "1").lower() not in ("0", "false", "no")
 
     def set_mode(self, mode):
         self.read_only = mode == "read-only"
@@ -241,6 +243,12 @@ class TerminalHost:
         self.end_line()
         self.console.print(f"[magenta]  ⚑ {self.escape(text[:2000])}[/]")
 
+    async def compacted(self, reason, before, after, by):
+        self.end_line()
+        self.console.print(
+            f"[dim]  ⇣ context compacted ({reason}): ~{before:,} → ~{after:,} tokens, summary by {self.escape(by)}[/]"
+        )
+
     async def model_route(self, decision):
         if self.quiet:
             return
@@ -266,10 +274,15 @@ class TerminalHost:
 
     async def approve(self, item):
         change = item["type"] == "fileChange"
+        if self.read_only and not change and self.trust_read_only and approvals.is_trusted(item.get("command", "")) \
+                and item.get("executionScope") == "workspace":
+            return "accept"  # Read-only mode still allows sandboxed commands that only read.
         if self.read_only:
             self.console.print("[yellow]  Read-only mode: not applied. Switch with /approvals ask.[/]")
             return "decline"
         if self.approve_all or (change and self.approve_edits):
+            return "accept"
+        if not change and self.auto_approved(item):
             return "accept"
         if not can_ask():
             self.console.print(
@@ -283,13 +296,84 @@ class TerminalHost:
             if item["type"] == "commandExecution":
                 self._command_card(item, approving=True)
             answer = self.console.input(
-                "  Type y + Enter to apply this file change, or n to decline [y/N] " if change else
-                "  Run with Windows host access? Type y + Enter, or n to decline [y/N] " if scope == "host" else
-                "  Run in the workspace sandbox? Type y + Enter, or n to decline [y/N] "
+                "  Apply this change? y = yes, a = yes to all file changes this session, n = no [y/a/N] "
+                if change else
+                "  Run with Windows host access? y = yes, a = always this command this session, n = no [y/a/N] "
+                if scope == "host" else
+                "  Run in the workspace sandbox? y = yes, a = always this command this session, n = no [y/a/N] "
             )
         except EOFError:
             return "decline"
-        return "accept" if answer.strip().lower() in ("y", "yes") else "decline"
+        answer = answer.strip().lower()
+        if answer in ("a", "always"):
+            if change:
+                self.approve_edits = True
+                self.console.print("[dim]  File changes are approved for the rest of this session (/approvals ask to undo).[/]")
+            else:
+                self.rules.allow(item.get("command", ""))
+            return "accept"
+        return "accept" if answer in ("y", "yes") else "decline"
+
+    def auto_approved(self, item):
+        """Read-only commands, and commands the user said "always" to, run without a prompt."""
+        command = item.get("command", "")
+        if self.rules.allowed(command):
+            self.console.print("[dim]  ✓ approved earlier in this session[/]")
+            return True
+        if not self.trust_read_only or not approvals.is_trusted(command):
+            return False
+        # A repository's own git config can run programs (core.fsmonitor, diff.external), so git
+        # is only trusted inside the sandbox; other read-only commands are trusted anywhere.
+        sandboxed = item.get("executionScope") == "workspace"
+        if not sandboxed and command.strip().lower().startswith("git"):
+            return False
+        if not self.quiet:
+            self.console.print("[dim]  ✓ read-only command: runs without asking[/]")
+        return True
+
+
+class JsonHost(TerminalHost):
+    """`exec --json`: one JSON object per line on stdout; human-readable notes go to stderr."""
+
+    def __init__(self, console, **options):
+        super().__init__(console, quiet=True, **options)
+
+    def emit(self, event, **fields):
+        import json as _json
+
+        sys.stdout.write(_json.dumps({"type": event, **fields}, ensure_ascii=False) + "\n")
+        sys.stdout.flush()
+
+    async def started(self, item):
+        self.emit("item.started", item=item)
+
+    async def delta(self, item_id, kind, text):
+        self.emit("item.delta", item_id=item_id, kind=kind, delta=text)
+
+    async def completed(self, item):
+        self.emit("item.completed", item=item)
+
+    async def model_route(self, decision):
+        self.emit("model.routed", model=decision.model, reason=decision.reason, confidence=decision.confidence)
+
+    async def plan(self, steps):
+        self.emit("plan.updated", steps=steps)
+
+    async def hook_note(self, text):
+        self.emit("note", text=text[:2000])
+
+    async def compacted(self, reason, before, after, by):
+        self.emit("context.compacted", reason=reason, tokens_before=before, tokens_after=after, summarizer=by)
+
+    async def approve(self, item):
+        if self.approve_all or (item["type"] == "fileChange" and self.approve_edits):
+            decision = "accept"
+        elif item["type"] != "fileChange" and self.auto_approved(item):
+            decision = "accept"
+        else:
+            decision = "decline"  # Nobody can answer a prompt in JSON mode; use -a to pre-approve.
+        self.emit("approval", item_id=item.get("id"), decision=decision)
+        return decision
 
 
 def _utf8_streams():
@@ -345,6 +429,7 @@ def _options(subcommand):
         help="approve every change and command without asking; only for disposable workspaces",
         **unset,
     )
+    parser.add_argument("-p", "--profile", help="settings profile from ~/.panini/config.toml", **unset)
     return parser
 
 
@@ -357,8 +442,13 @@ def build_parser():
     parser.add_argument("--version", action="version", version=f"panini-cli {VERSION}")
     commands = parser.add_subparsers(dest="command", metavar="COMMAND")
     run = commands.add_parser("exec", parents=[_options(True)], help="run one task and exit")
-    run.add_argument("prompt", nargs="+", help="what to do")
+    run.add_argument("prompt", nargs="+", help="what to do; - reads the task from stdin")
     run.add_argument("-q", "--quiet", action="store_true", help="show only changes, commands and the answer")
+    run.add_argument("--json", action="store_true", help="print JSON Lines events on stdout (logs go to stderr)")
+    run.add_argument("--output-schema", metavar="FILE", help="JSON Schema the final answer must match")
+    run.add_argument("--image", action="append", metavar="FILE", help="attach an image (repeatable)")
+    config_command = commands.add_parser("config", help="show or create ~/.panini/config.toml")
+    config_command.add_argument("action", nargs="?", choices=["show", "init", "path"], default="show")
     resume = commands.add_parser(
         "resume", parents=[_options(True)], help="continue the last (or a given) conversation"
     )
@@ -390,6 +480,32 @@ def build_parser():
     auth_commands.add_parser("status", help="show whether a key is configured (never prints it)")
     auth_commands.add_parser("logout", help="remove the saved key")
     return parser
+
+
+def config_command(args, data):
+    from rich.console import Console
+
+    console = Console(highlight=False)
+    target = userconfig.path()
+    if args.action == "path":
+        console.print(str(target))
+        return 0
+    if args.action == "init":
+        try:
+            console.print(f"Created {userconfig.init()}")
+        except FileExistsError as exc:
+            console.print(f"[yellow]{exc}[/]")
+            return 1
+        return 0
+    if not data:
+        console.print(f"[dim]No config file at {target}. Create one with `panini-cli config init`.[/]")
+    else:
+        console.print(f"[dim]{target}[/]")
+        for key, value in sorted(userconfig.effective(data, getattr(args, "profile", None)).items()):
+            console.print(f"  {key} = {value!r}")
+        profiles = ", ".join(data.get("profiles") or {}) or "none"
+        console.print(f"[dim]Profiles: {profiles} · MCP servers: {', '.join(data.get('mcp_servers') or {}) or 'none'}[/]")
+    return 0
 
 
 def router_command(args, console):
@@ -492,6 +608,13 @@ def _session(agent, settings, console, host, runner):
             continue
         if command == "/plan":
             host.plan_now(agent.plan)
+            continue
+        if command == "/compact":
+            try:
+                if not runner.run(agent.compact("manual")):
+                    console.print("[dim]Nothing to compact yet.[/]")
+            except ModelError as exc:
+                console.print(f"[red]Compaction failed:[/] {host.escape(str(exc))}")
             continue
         if command == "/new":
             agent.reset()
@@ -719,7 +842,7 @@ def remember(agent, text):
     """Save the conversation after each turn; a failure to save never loses the answer."""
     if not agent.items:
         return
-    title = next((i["content"] for i in agent.items if i.get("role") == "user"), text)
+    title = next((text_of(i["content"]) for i in agent.items if i.get("role") == "user"), text)
     try:
         sessions.save(agent.session_id, agent.workspace.root, agent.items, str(title))
     except OSError:
@@ -737,6 +860,15 @@ def main(argv=None):
 
             Console(highlight=False).print(f"[red]API key setup failed:[/] {exc}")
             return 2
+    try:
+        user_settings = userconfig.apply(getattr(args, "profile", None))
+    except ValueError as exc:
+        from rich.console import Console
+
+        Console(highlight=False).print(f"[red]Config error:[/] {exc}")
+        return 2
+    if args.command == "config":
+        return config_command(args, user_settings)
     if args.command == "app-server":
         from .server import serve
 
@@ -867,9 +999,15 @@ def main(argv=None):
             console.print(f"[red]PANINI native sandbox unavailable:[/] {reason}")
             return 2
     approve_all, approve_edits = getattr(args, "approve_all", False), getattr(args, "approve_edits", False)
-    host = TerminalHost(
-        console, approve_edits=approve_edits, approve_all=approve_all, quiet=getattr(args, "quiet", False)
-    )
+    if getattr(args, "json", False):
+        from rich.console import Console
+
+        console = Console(highlight=False, stderr=True)
+        host = JsonHost(console, approve_edits=approve_edits, approve_all=approve_all)
+    else:
+        host = TerminalHost(
+            console, approve_edits=approve_edits, approve_all=approve_all, quiet=getattr(args, "quiet", False)
+        )
     mode = getattr(args, "approval_mode", None) or default_approval_mode()
     if mode:
         host.set_mode(mode)
@@ -933,11 +1071,26 @@ def main(argv=None):
         agent.items, agent.session_id = record["items"], record["id"]
         console.print(f"[dim]Resumed: {host.escape(record['title'])}[/]")
     if args.command == "exec":
+        prompt = " ".join(args.prompt)
+        if prompt.strip() == "-":
+            prompt = sys.stdin.read()
+        if not prompt.strip():
+            console.print("[red]The task is empty.[/]")
+            return 2
+        schema = None
+        if getattr(args, "output_schema", None):
+            import json as _json
+
+            try:
+                schema = _json.loads(Path(args.output_schema).read_text(encoding="utf-8"))
+            except (OSError, ValueError) as exc:
+                console.print(f"[red]Cannot read the output schema:[/] {exc}")
+                return 2
         try:
 
             async def once():
                 try:
-                    return await agent.turn(" ".join(args.prompt))
+                    return await agent.turn(prompt, schema, images=getattr(args, "image", None) or ())
                 finally:
                     await agent.close()
 
@@ -946,9 +1099,25 @@ def main(argv=None):
             host.end_line()
             console.print("[yellow]Stopped.[/]")
             return 130
-        report(console, result)
-        remember(agent, " ".join(args.prompt))
-        return 0 if result.status == "completed" else 1
+        except (OSError, ValueError) as exc:
+            console.print(f"[red]{host.escape(str(exc))}[/]")
+            return 2
+        if isinstance(host, JsonHost):
+            host.emit(
+                "turn.completed",
+                status=result.status,
+                text=result.text,
+                error=result.error,
+                usage=result.usage,
+                steps=result.steps,
+                cost_usd=getattr(result, "cost_usd", None),
+                session_id=agent.session_id,
+            )
+        else:
+            report(console, result)
+        remember(agent, prompt)
+        # 0 done, 1 failed, 3 stopped at the step limit, 4 stopped by the budget, 130 interrupted.
+        return {"completed": 0, "incomplete": 3, "budget": 4, "interrupted": 130}.get(result.status, 1)
     approvals = MODES[host.mode] + (
         " · commands in a Docker sandbox"
         if settings.sandbox == "docker"

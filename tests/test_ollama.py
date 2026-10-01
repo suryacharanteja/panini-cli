@@ -3,7 +3,7 @@ import json
 import httpx
 import pytest
 
-from panini_cli.agent import ollama
+from panini_cli.agent import ollama, tools
 from panini_cli.agent.model import ModelError, ModelTurn, RoutedModel, ToolCall
 
 
@@ -40,7 +40,7 @@ async def test_streams_text_and_reports_usage(monkeypatch):
     async def on_text(item_id, delta):
         deltas.append(delta)
 
-    turn = await local(handler).respond("sys", [{"role": "user", "content": "hi"}], [], on_text=on_text)
+    turn = await local(handler).respond("sys", [{"role": "user", "content": "hi"}], tools.TOOLS, on_text=on_text)
     assert turn.text == "Hello" and deltas == ["Hel", "lo"]
     assert turn.usage == {"input_tokens": 11, "output_tokens": 4, "total_tokens": 15}
     assert seen["model"] == "qwen2.5:3b-instruct"
@@ -52,7 +52,7 @@ async def test_streams_text_and_reports_usage(monkeypatch):
 @pytest.mark.anyio
 async def test_tool_calls_become_agent_calls():
     call = {"function": {"name": "read_file", "arguments": {"path": "a.py"}}}
-    turn = await local(lambda request: stream({"message": {"tool_calls": [call]}}, DONE)).respond("s", [], [])
+    turn = await local(lambda request: stream({"message": {"tool_calls": [call]}}, DONE)).respond("s", [], tools.TOOLS)
     assert [c.name for c in turn.calls] == ["read_file"]
     assert json.loads(turn.calls[0].arguments) == {"path": "a.py"}
     assert turn.items[0]["type"] == "function_call"
@@ -62,7 +62,7 @@ async def test_tool_calls_become_agent_calls():
 @pytest.mark.anyio
 async def test_json_printed_as_text_is_recovered_as_a_tool_call():
     text = '```json\n{"name": "read_file", "arguments": {"path": "a.py"}}\n```'
-    turn = await local(lambda request: stream({"message": {"content": text}}, DONE)).respond("s", [], [])
+    turn = await local(lambda request: stream({"message": {"content": text}}, DONE)).respond("s", [], tools.TOOLS)
     assert turn.calls and turn.calls[0].name == "read_file" and turn.text == ""
 
 

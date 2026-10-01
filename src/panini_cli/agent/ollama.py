@@ -57,13 +57,15 @@ def available(name=None):
     return True, bare
 
 
-def _ollama_tools():
+def _ollama_tools(tool_defs):
+    """Responses-format function tools -> Ollama's format. Hosted (non-function) tools are skipped."""
     return [
         {
             "type": "function",
-            "function": {"name": t["name"], "description": t["description"], "parameters": t["parameters"]},
+            "function": {"name": t["name"], "description": t.get("description", ""), "parameters": t["parameters"]},
         }
-        for t in tools.TOOLS
+        for t in tool_defs
+        if t.get("type") == "function"
     ]
 
 
@@ -124,6 +126,7 @@ class OllamaModel:
         except ValueError:
             self.context = config.DEFAULT_LOCAL_CONTEXT
         self.transport = None  # Tests inject an httpx transport.
+        self.known_tools = {tool["name"] for tool in tools.TOOLS}
 
     def switch_model(self, model):
         self.model = model.removeprefix(config.LOCAL_PREFIX)
@@ -132,13 +135,14 @@ class OllamaModel:
         body = {
             "model": self.model,
             "messages": to_messages(instructions, items),
-            "tools": [] if output_schema else _ollama_tools(),
+            "tools": [] if output_schema else _ollama_tools(tool_defs or []),
             "stream": True,
             "keep_alive": "10m",
             "options": {"num_ctx": self.context, "temperature": 0.2},
         }
         if output_schema:
             body["format"] = output_schema
+        self.known_tools = {t["name"] for t in (tool_defs or []) if "name" in t}
         text, calls, usage = [], [], {}
         item_id = f"msg_ollama_{time.monotonic_ns()}"
         try:
@@ -174,7 +178,7 @@ class OllamaModel:
     def _turn(self, text, raw_calls, usage):
         if not raw_calls:
             parsed = _text_tool_call(text)
-            if parsed and parsed[0] in {tool["name"] for tool in tools.TOOLS}:
+            if parsed and parsed[0] in self.known_tools:
                 raw_calls, text = [{"name": parsed[0], "arguments": parsed[1]}], ""
         # Plain role messages, not output-message items: valid input for OpenAI if the task escalates.
         output, calls = [], []
@@ -191,9 +195,9 @@ class OllamaModel:
         return ModelTurn(output, text, calls, usage)
 
 
-def invalid_turn(turn):
+def invalid_turn(turn, tool_defs=None):
     """Why a local turn cannot be trusted, or None. The router escalates instead of looping on it."""
-    known = {tool["name"] for tool in tools.TOOLS}
+    known = {tool["name"] for tool in (tools.TOOLS if tool_defs is None else tool_defs) if "name" in tool}
     for call in turn.calls:
         if call.name not in known:
             return f"unknown tool {call.name!r}"
