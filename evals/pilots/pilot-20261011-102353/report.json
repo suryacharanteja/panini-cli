@@ -33,22 +33,22 @@
     "tasks_sha256": "40384393fac824bd6cb520802af7e9f480c76729b87be6c1d1759f5c88b91c53",
     "fixture_revision": 2,
     "pilot_driver_sha256": "f6339f5376362aad8d39a447da01e0671dcb0aad328a9ca5d179a44bf73d8f98",
-    "reserved_cost_upper_bound_usd": 0.42389440000000006,
-    "forwarded_api_calls": 54,
+    "reserved_cost_upper_bound_usd": 0.5955972,
+    "forwarded_api_calls": 76,
     "denied_api_calls": 0
   },
   "summary": {
-    "attempted": 7,
-    "solved": 7,
+    "attempted": 10,
+    "solved": 10,
     "failed": 0,
-    "estimated_cost_usd": 0.0325858,
+    "estimated_cost_usd": 0.0461688,
     "unpriced_trials": 0,
-    "mean_agent_seconds": 16.842989,
+    "mean_agent_seconds": 21.2477547,
     "trials_missing_agent_time": 0,
-    "estimated_cost_per_solved_task_usd": 0.004655114285714286,
-    "mean_total_seconds": 27.665142857142857,
+    "estimated_cost_per_solved_task_usd": 0.00461688,
+    "mean_total_seconds": 31.9985,
     "trials_with_failed_commands": 2,
-    "cli_completed": 7,
+    "cli_completed": 10,
     "tasks_recovered_after_command_failure": 0
   },
   "trials": [
@@ -204,6 +204,72 @@
       },
       "wheel_sha256": "3b71762758078de204404b6d67220a1f9d6c20ae8b7c4fc4396c1ae25428d513",
       "task_checksum": "97bb0eea2ba3a33b37d4a8ca207366eb31699dd380342c7d8bb8853a61af3b8c",
+      "task_recovered_after_command_failure": false
+    },
+    {
+      "task": "fizzbuzz",
+      "repetition": 2,
+      "solved": true,
+      "reward": 1.0,
+      "cost_usd_estimated": 0.0027894,
+      "input_tokens": 11085,
+      "output_tokens": 477,
+      "agent_seconds": 26.85733,
+      "total_seconds": 37.219,
+      "turn_status": "completed",
+      "exception_type": null,
+      "recovery": {
+        "failed_commands": 0,
+        "followed_by_successful_command": 0,
+        "unrecovered_commands": 0,
+        "failures_with_successful_same_command_retry": 0
+      },
+      "wheel_sha256": "3b71762758078de204404b6d67220a1f9d6c20ae8b7c4fc4396c1ae25428d513",
+      "task_checksum": "a4a705e2451b23021d58f230c6fda0ed94639011363dc459976e2334f1284277",
+      "task_recovered_after_command_failure": false
+    },
+    {
+      "task": "pagination-off-by-one",
+      "repetition": 2,
+      "solved": true,
+      "reward": 1.0,
+      "cost_usd_estimated": 0.005560600000000001,
+      "input_tokens": 23477,
+      "output_tokens": 721,
+      "agent_seconds": 25.722278,
+      "total_seconds": 36.547,
+      "turn_status": "completed",
+      "exception_type": null,
+      "recovery": {
+        "failed_commands": 0,
+        "followed_by_successful_command": 0,
+        "unrecovered_commands": 0,
+        "failures_with_successful_same_command_retry": 0
+      },
+      "wheel_sha256": "3b71762758078de204404b6d67220a1f9d6c20ae8b7c4fc4396c1ae25428d513",
+      "task_checksum": "02da9bd234f449f97df0b9d588c36dca221ab20fbc2e5ee4e504bef9bfae5632",
+      "task_recovered_after_command_failure": false
+    },
+    {
+      "task": "parse-config",
+      "repetition": 2,
+      "solved": true,
+      "reward": 1.0,
+      "cost_usd_estimated": 0.005233,
+      "input_tokens": 21143,
+      "output_tokens": 837,
+      "agent_seconds": 41.997016,
+      "total_seconds": 52.563,
+      "turn_status": "completed",
+      "exception_type": null,
+      "recovery": {
+        "failed_commands": 0,
+        "followed_by_successful_command": 0,
+        "unrecovered_commands": 0,
+        "failures_with_successful_same_command_retry": 0
+      },
+      "wheel_sha256": "3b71762758078de204404b6d67220a1f9d6c20ae8b7c4fc4396c1ae25428d513",
+      "task_checksum": "08b8cfa244abb0d1abfea0427510764d86e93ecf1d7d4782eafc9cbc9293124a",
       "task_recovered_after_command_failure": false
     }
   ]

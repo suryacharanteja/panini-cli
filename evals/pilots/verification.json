@@ -1,0 +1,84 @@
+{
+  "version": "2.1.1b1",
+  "created_at": "2026-10-11T06:28:58.168587+00:00",
+  "executable_sha256": "20cdf97ffdb81ec133fb8eafa54c5de51a1091f00f9857ed635e53ccf7c71264",
+  "unit_tests": {
+    "passed": 392,
+    "failed": 0,
+    "errors": 0,
+    "skipped": 4,
+    "skip_reasons": [
+      {
+        "test": "test_harbor_partial_usage_and_trajectory",
+        "reason": "could not import 'harbor': No module named 'harbor'"
+      },
+      {
+        "test": "test_harbor_prompt_is_uploaded_not_shell_interpolated",
+        "reason": "could not import 'harbor': No module named 'harbor'"
+      },
+      {
+        "test": "test_real_npm_install_then_offline_execution_without_host_escalation",
+        "reason": "explicit live registry test"
+      },
+      {
+        "test": "test_native_command_denies_symlink_escape",
+        "reason": "Windows symlink creation unavailable: WinError 1314 (required privilege missing)."
+      }
+    ]
+  },
+  "harbor_adapter_tests": {
+    "passed": 12,
+    "failed": 0
+  },
+  "static_checks": {
+    "ruff": "passed"
+  },
+  "windows_sandbox_uat": {
+    "packagedCommand": true,
+    "unattendedWorkspaceCommand": true,
+    "workspaceWrite": true,
+    "outsideWriteDenied": true,
+    "secretFileDenied": true,
+    "secretEnvironmentStripped": true,
+    "recoveryRestored": true
+  },
+  "windows_feature_uat": {
+    "rpcReadOnlyEnforced": true,
+    "progressiveSkills": true,
+    "steering": true,
+    "typedImages": true,
+    "backgroundWorker": true,
+    "durableRpcResume": true,
+    "malformedRpcRecovery": true,
+    "sandboxedConPTY": true,
+    "terminalResize": true,
+    "sandboxedSSR": true,
+    "previewTransport": "stdio",
+    "hostLoopback": "deny"
+  },
+  "relocated_single_exe_rpc_uat": {
+    "malformedIdRecovery": true,
+    "readOnlyPolicy": true,
+    "processRestartResume": true,
+    "modelList": true,
+    "processRestartSteering": true,
+    "singleFileRelocation": true,
+    "executableSHA256": "20cdf97ffdb81ec133fb8eafa54c5de51a1091f00f9857ed635e53ccf7c71264"
+  },
+  "web_uat": {
+    "dependency_install": true,
+    "build_and_tests": true,
+    "live_preview_and_hmr": true,
+    "install_allowed_hosts": [
+      "registry.npmjs.org"
+    ],
+    "build_test_allowed_hosts": [],
+    "runtime_identity": "24499cfb38ae5635510d6c296674ea56f5e765f24301edc3ec465157ed99cbc7",
+    "containment_tier": "base-container"
+  },
+  "limitations": [
+    "UAT ran on the development machine; a clean Windows machine has not been tested.",
+    "Executable is unsigned; no independent security certification.",
+    "Harbor tests use Linux container isolation and do not evaluate Windows MXC."
+  ]
+}

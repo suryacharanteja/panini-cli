@@ -9,6 +9,9 @@ dist/
 .env
 node_modules/
 *.spec
+<<<<<<< HEAD
 .coverage
 %SystemDrive%/
+=======
+>>>>>>> b96cb5d36a01c9edc02cb99b7fc2612c1e31b4e7
 
