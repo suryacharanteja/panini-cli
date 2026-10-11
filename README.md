@@ -43,6 +43,8 @@ Get-FileHash .\panini-cli.exe -Algorithm SHA256 # Compare with SHA256SUMS.txt
 
 The executable is unsigned. Windows MXC requires a supported Windows host; a failed capability check stops execution.
 The beta has passed UAT on the development machine, but has not yet been tested on a clean Windows machine or independently security certified.
+GitHub's Windows Server runner lacks the experimental Windows sandbox API; native integration tests are skipped there.
+The packaged Windows MXC boundary is verified separately on the supported development host.
 For PANINI-JARVIS, launch the same executable with `app-server --stdio`; no source checkout is needed at runtime.
 See [sandbox permissions and limits](docs/SANDBOX.md) and [the security model](SECURITY.md).
 

@@ -10,6 +10,7 @@ from panini_cli.agent import native_probe, native_sandbox
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows AppContainer API")
+@pytest.mark.usefixtures("windows_sandbox_api")
 def test_boundary_gate_checks_allowed_and_denied_filesystem_access():
     ready, reason = native_probe.verify_boundary()
     assert ready, reason
@@ -23,6 +24,7 @@ def test_native_spec_has_required_identifier_and_version(tmp_path):
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows AppContainer API")
+@pytest.mark.usefixtures("windows_sandbox_api")
 def test_native_api_ignores_workspace_dll_name_collision(tmp_path, monkeypatch):
     (tmp_path / "processmodel.dll").write_bytes(b"not a Windows DLL")
     monkeypatch.chdir(tmp_path)

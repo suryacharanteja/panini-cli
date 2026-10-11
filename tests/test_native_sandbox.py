@@ -32,6 +32,7 @@ def test_native_environment_does_not_inherit_unknown_host_variables(tmp_path):
 
 @pytest.mark.anyio
 @pytest.mark.skipif(os.name != "nt", reason="Windows AppContainer API")
+@pytest.mark.usefixtures("windows_sandbox_api")
 async def test_native_command_output_and_workspace_write(tmp_path):
     ready, reason = native_sandbox.available()
     if not ready:
@@ -52,6 +53,7 @@ async def test_native_command_output_and_workspace_write(tmp_path):
 
 @pytest.mark.anyio
 @pytest.mark.skipif(os.name != "nt", reason="Windows AppContainer API")
+@pytest.mark.usefixtures("windows_sandbox_api")
 async def test_native_command_denies_outside_write(tmp_path):
     outside = tmp_path.parent / (tmp_path.name + "-outside.txt")
     assert not outside.exists()
@@ -62,6 +64,7 @@ async def test_native_command_denies_outside_write(tmp_path):
 
 @pytest.mark.anyio
 @pytest.mark.skipif(os.name != "nt", reason="Windows AppContainer API")
+@pytest.mark.usefixtures("windows_sandbox_api")
 async def test_native_command_denies_symlink_escape(tmp_path):
     with tempfile.TemporaryDirectory(prefix="panini-native-outside-") as outside_dir:
         outside = Path(outside_dir)
@@ -82,6 +85,7 @@ async def test_native_command_denies_symlink_escape(tmp_path):
 
 @pytest.mark.anyio
 @pytest.mark.skipif(os.name != "nt", reason="Windows AppContainer API")
+@pytest.mark.usefixtures("windows_sandbox_api")
 async def test_native_command_denies_junction_escape(tmp_path):
     with tempfile.TemporaryDirectory(prefix="panini-native-outside-") as outside_dir:
         outside = Path(outside_dir)
@@ -106,6 +110,7 @@ async def test_native_command_denies_junction_escape(tmp_path):
 
 @pytest.mark.anyio
 @pytest.mark.skipif(os.name != "nt", reason="Windows AppContainer API")
+@pytest.mark.usefixtures("windows_sandbox_api")
 async def test_appcontainer_denies_preexisting_junction_without_preflight(tmp_path, monkeypatch):
     """Prove the OS boundary, independently of PANINI's preflight link scan."""
     with tempfile.TemporaryDirectory(prefix="panini-native-outside-") as outside_dir:
@@ -130,6 +135,7 @@ async def test_appcontainer_denies_preexisting_junction_without_preflight(tmp_pa
 
 @pytest.mark.anyio
 @pytest.mark.skipif(os.name != "nt", reason="Windows AppContainer API")
+@pytest.mark.usefixtures("windows_sandbox_api")
 async def test_native_command_allows_junction_within_workspace(tmp_path):
     target = tmp_path / "real"
     target.mkdir()
@@ -149,6 +155,7 @@ async def test_native_command_allows_junction_within_workspace(tmp_path):
 
 @pytest.mark.anyio
 @pytest.mark.skipif(os.name != "nt", reason="Windows AppContainer API")
+@pytest.mark.usefixtures("windows_sandbox_api")
 async def test_native_command_ignores_broken_package_junction(tmp_path):
     missing = tmp_path / "package-that-was-moved"
     link = tmp_path / "package-link"
@@ -164,6 +171,7 @@ async def test_native_command_ignores_broken_package_junction(tmp_path):
 
 @pytest.mark.anyio
 @pytest.mark.skipif(os.name != "nt", reason="Windows AppContainer API")
+@pytest.mark.usefixtures("windows_sandbox_api")
 async def test_native_command_denies_hardlink_escape(tmp_path):
     with tempfile.TemporaryDirectory(prefix="panini-native-outside-") as outside_dir:
         outside = Path(outside_dir) / "private.txt"
@@ -184,6 +192,7 @@ async def test_native_command_denies_hardlink_escape(tmp_path):
 
 @pytest.mark.anyio
 @pytest.mark.skipif(os.name != "nt", reason="Windows AppContainer API")
+@pytest.mark.usefixtures("windows_sandbox_api")
 async def test_native_command_cannot_create_hardlink_to_outside_file(tmp_path):
     with tempfile.TemporaryDirectory(prefix="panini-native-outside-") as outside_dir:
         outside = Path(outside_dir) / "private.txt"
@@ -200,6 +209,7 @@ async def test_native_command_cannot_create_hardlink_to_outside_file(tmp_path):
 
 @pytest.mark.anyio
 @pytest.mark.skipif(os.name != "nt", reason="Windows AppContainer API")
+@pytest.mark.usefixtures("windows_sandbox_api")
 async def test_native_command_cannot_escape_through_new_junction(tmp_path):
     with tempfile.TemporaryDirectory(prefix="panini-native-outside-") as outside_dir:
         outside = Path(outside_dir)
@@ -219,6 +229,7 @@ async def test_native_command_cannot_escape_through_new_junction(tmp_path):
 
 @pytest.mark.anyio
 @pytest.mark.skipif(os.name != "nt", reason="Windows AppContainer API")
+@pytest.mark.usefixtures("windows_sandbox_api")
 async def test_native_command_denies_device_path_outside_workspace(tmp_path):
     with tempfile.TemporaryDirectory(prefix="panini-native-outside-") as outside_dir:
         outside = Path(outside_dir) / "private.txt"
@@ -234,6 +245,7 @@ async def test_native_command_denies_device_path_outside_workspace(tmp_path):
 
 @pytest.mark.anyio
 @pytest.mark.skipif(os.name != "nt", reason="Windows AppContainer API")
+@pytest.mark.usefixtures("windows_sandbox_api")
 async def test_native_child_process_keeps_workspace_boundary(tmp_path):
     inside = tmp_path / "child-inside.txt"
     outside = tmp_path.parent / (tmp_path.name + "-child-outside.txt")
@@ -246,6 +258,7 @@ async def test_native_child_process_keeps_workspace_boundary(tmp_path):
 
 @pytest.mark.anyio
 @pytest.mark.skipif(os.name != "nt", reason="Windows AppContainer API")
+@pytest.mark.usefixtures("windows_sandbox_api")
 async def test_native_command_bounds_large_output(tmp_path):
     with pytest.raises(OSError, match="output exceeded"):
         await native_sandbox.run_command("Write-Output ('x' * 5000000)", tmp_path, 10)
@@ -253,6 +266,7 @@ async def test_native_command_bounds_large_output(tmp_path):
 
 @pytest.mark.anyio
 @pytest.mark.skipif(os.name != "nt", reason="Windows AppContainer API")
+@pytest.mark.usefixtures("windows_sandbox_api")
 async def test_native_command_timeout(tmp_path):
     started = time.monotonic()
     result = await native_sandbox.run_command("Start-Sleep -Seconds 30", tmp_path, 1)
@@ -262,6 +276,7 @@ async def test_native_command_timeout(tmp_path):
 
 @pytest.mark.anyio
 @pytest.mark.skipif(os.name != "nt", reason="Windows AppContainer API")
+@pytest.mark.usefixtures("windows_sandbox_api")
 async def test_native_command_cancellation(tmp_path):
     task = asyncio.create_task(native_sandbox.run_command("Start-Sleep -Seconds 30", tmp_path, 30))
     await asyncio.sleep(1)
