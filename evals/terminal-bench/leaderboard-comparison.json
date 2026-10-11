@@ -1,0 +1,120 @@
+{
+  "checked_at": "2026-10-11T07:37:59.126656+00:00",
+  "scope": "Published upstream Terminal-Bench 4.0 reference results; not new head-to-head evaluations",
+  "upstream_commit": "209679e34327a78ce8e9bf5300b2f317992863c9",
+  "dataset": "terminal-bench/terminal-bench",
+  "dataset_ref": "sha256:39d9f44b40420cde8fdcc087579c0d72a7e14fa3656d603c3f0d22fb35e27732",
+  "metric_scope": "Accuracy in percent, reported 95% interval half-width; costs as published, not verified invoices",
+  "limitations": [
+    "Different models, agent versions and settings; no causal claim about harness quality",
+    "No PANINI full benchmark score, rank, relative speed or relative cost is available",
+    "Published model costs do not establish future total API and environment charges"
+  ],
+  "panini": {
+    "agent_version": "2.1.1b1",
+    "model": "openai/gpt-5.6-luna",
+    "full_evaluation_completed": false,
+    "official_score": null,
+    "official_rank": null,
+    "selected_tasks": 1,
+    "smoke_attempts": 2,
+    "smoke_rewards": [
+      0,
+      0
+    ]
+  },
+  "baselines": [
+    {
+      "agent": "Codex",
+      "model": "GPT-5.6 Luna",
+      "source_filter": {
+        "agent": "codex",
+        "agent_version": "0.149.1",
+        "model_name": "openai/gpt-5.6-luna",
+        "reasoning_effort": "max"
+      },
+      "source_url": "https://github.com/harbor-framework/terminal-bench/blob/209679e34327a78ce8e9bf5300b2f317992863c9/leaderboard/submissions/2026-08-26-openai-gpt-5-6-luna-max-codex.json",
+      "source_sha256": "59ae3614eca2b0c1f087b7a50d65e3fc40dd2ef0188c2fab40d32c5a50f823a7",
+      "source_jobs": [
+        "https://hub.harborframework.com/jobs/b7444ba2-78b7-46a0-a3c1-2196d40a337d"
+      ],
+      "metrics": {
+        "accuracy": 17.27,
+        "accuracy_ci95_half_width": 2.85,
+        "n_trials": 330,
+        "successes": 57,
+        "total_cost_usd": 346.67,
+        "avg_trial_duration_sec": 4088.3
+      }
+    },
+    {
+      "agent": "Codex",
+      "model": "GPT-6.1 Sol",
+      "source_filter": {
+        "agent": "codex",
+        "agent_version": "0.159.0",
+        "model_name": "openai/gpt-6.1-sol",
+        "reasoning_effort": "max"
+      },
+      "source_url": "https://github.com/harbor-framework/terminal-bench/blob/209679e34327a78ce8e9bf5300b2f317992863c9/leaderboard/submissions/2026-09-30-openai-gpt-6-1-sol-max-codex.json",
+      "source_sha256": "2bb4407be33d9ea12c9d1173ee749b1296bba0b5fb8442c87c9cc7be3c2d8bf7",
+      "source_jobs": [
+        "https://hub.harborframework.com/jobs/3837153f-6673-539d-b3e2-99a6edd3c5db"
+      ],
+      "metrics": {
+        "accuracy": 58.18,
+        "accuracy_ci95_half_width": 3.11,
+        "n_trials": 330,
+        "successes": 192,
+        "total_cost_usd": 634.24,
+        "avg_trial_duration_sec": 3176.7
+      }
+    },
+    {
+      "agent": "Claude Code",
+      "model": "Opus 5.5",
+      "source_filter": {
+        "agent": "claude-code",
+        "agent_version": "2.1.284",
+        "model_name": "anthropic/claude-opus-5-5",
+        "reasoning_effort": "max"
+      },
+      "source_url": "https://github.com/harbor-framework/terminal-bench/blob/209679e34327a78ce8e9bf5300b2f317992863c9/leaderboard/submissions/2026-09-30-anthropic-claude-opus-5-5-max-claude-code.json",
+      "source_sha256": "782d7a4b5e832873b660fad00da9a8d2eb2f37b6bf3a7e65e4f6ffa7cd82a53c",
+      "source_jobs": [
+        "https://hub.harborframework.com/jobs/bfd722a4-4c18-5a00-a874-c70b646870b8"
+      ],
+      "metrics": {
+        "accuracy": 64.85,
+        "accuracy_ci95_half_width": 3.11,
+        "n_trials": 330,
+        "successes": 214,
+        "total_cost_usd": 4718.65,
+        "avg_trial_duration_sec": 4790.4
+      }
+    },
+    {
+      "agent": "Claude Code",
+      "model": "Sonnet 5.5",
+      "source_filter": {
+        "agent": "claude-code",
+        "agent_version": "2.1.284",
+        "model_name": "anthropic/claude-sonnet-5-5",
+        "reasoning_effort": "max"
+      },
+      "source_url": "https://github.com/harbor-framework/terminal-bench/blob/209679e34327a78ce8e9bf5300b2f317992863c9/leaderboard/submissions/2026-09-30-anthropic-claude-sonnet-5-5-max-claude-code.json",
+      "source_sha256": "723a52bf4c657d3bde65ce61a4dd5caffbae3aa2359f9944181bb5c1eb81455b",
+      "source_jobs": [
+        "https://hub.harborframework.com/jobs/4e34616a-9b52-50b7-adef-136579456b21"
+      ],
+      "metrics": {
+        "accuracy": 61.82,
+        "accuracy_ci95_half_width": 2.94,
+        "n_trials": 330,
+        "successes": 204,
+        "total_cost_usd": 7333.64,
+        "avg_trial_duration_sec": 7431.6
+      }
+    }
+  ]
+}

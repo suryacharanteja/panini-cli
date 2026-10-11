@@ -82,6 +82,12 @@ PANINI has **no official Terminal-Bench score or ranking yet**. The
 [submission policy](https://github.com/harbor-framework/terminal-bench/blob/main/leaderboard/SUBMIT.md)
 currently accepts maintainer-run evaluations only. We are preparing for that route.
 
+The [maintainer-run evaluation request](https://github.com/harbor-framework/terminal-bench/issues/2227)
+has been submitted. **Acceptance is pending; no full evaluation has been launched.**
+The request includes the frozen kit and both failed smoke attempts. On 2026-10-11 we
+rechecked all 66 canonical hashes and reran the 26 evaluation checks successfully.
+The $5 pilot cap remains in effect, with no additional paid model calls for this handoff.
+
 The [maintainer evaluation handoff](evals/TERMINAL_BENCH.md) provides a pinned adapter,
 a separate Python runtime for task containers, and a full-run configuration for **66 tasks × 5 attempts = 330 trials**.
 Every downloaded task was checked against the canonical dataset digest; the configuration preserves task timeouts
@@ -104,6 +110,27 @@ The [maintainer evaluation kit](https://github.com/suryacharanteja/panini-cli/re
 contains the frozen wheel and reproducible setup instructions. Leaderboard placement remains subject to a
 maintainer-run full evaluation and review.
 
+### Published official reference results
+
+These are upstream Terminal-Bench 4.0 results checked on **2026-10-11**, not new
+PANINI head-to-head runs. Accuracy includes the upstream 95% confidence interval
+half-width. Each reference has 330 trials; all four use `max` reasoning effort.
+
+| Agent version | Model | Published accuracy | Upstream-reported total cost |
+| --- | --- | ---: | ---: |
+| [Codex 0.149.1](https://github.com/harbor-framework/terminal-bench/blob/209679e34327a78ce8e9bf5300b2f317992863c9/leaderboard/submissions/2026-08-26-openai-gpt-5-6-luna-max-codex.json) | GPT-5.6 Luna | 17.27% ± 2.85% | $346.67 |
+| [Codex 0.159.0](https://github.com/harbor-framework/terminal-bench/blob/209679e34327a78ce8e9bf5300b2f317992863c9/leaderboard/submissions/2026-09-30-openai-gpt-6-1-sol-max-codex.json) | GPT-6.1 Sol | 58.18% ± 3.11% | $634.24 |
+| [Claude Code 2.1.284](https://github.com/harbor-framework/terminal-bench/blob/209679e34327a78ce8e9bf5300b2f317992863c9/leaderboard/submissions/2026-09-30-anthropic-claude-opus-5-5-max-claude-code.json) | Opus 5.5 | 64.85% ± 3.11% | $4,718.65 |
+| [Claude Code 2.1.284](https://github.com/harbor-framework/terminal-bench/blob/209679e34327a78ce8e9bf5300b2f317992863c9/leaderboard/submissions/2026-09-30-anthropic-claude-sonnet-5-5-max-claude-code.json) | Sonnet 5.5 | 61.82% ± 2.94% | $7,333.64 |
+| PANINI CLI 2.1.1b1 | GPT-5.6 Luna | **Not measured on the full benchmark** | Unknown |
+
+Different models, agent versions and settings prevent a claim that PANINI is better
+or worse from these data. Even the same-model Codex row needs a full PANINI run
+under comparable settings. Published costs are historical reference values, not
+verified invoices, future price quotes or a complete compute budget. The frozen
+[comparison snapshot](evals/terminal-bench/leaderboard-comparison.json) records the
+source commit, file checksums, job links and exact metrics.
+
 ## Earlier routing measurements
 
 Same ten tasks, same test oracle, fresh git repo per task ([`evals/`](evals/)):
@@ -119,8 +146,9 @@ claiming an edit it never made. That run is why the local tier now only answers 
 narrate, guess about unread files, or claim unmade changes are redone in the cloud. Both runs are kept in
 [`evals/results/`](evals/results/).
 
-Per-task results are in [`evals/results/`](evals/results/). Codex CLI was not installed on the test machine, so it has not
-been compared yet; the harness supports it (`--arm codex`). Run it on your own tasks before trusting any number here.
+Per-task results are in [`evals/results/`](evals/results/). These earlier measurements did not include Codex CLI or
+Claude Code. Neither has been evaluated head-to-head with PANINI here; the official reference results above are
+separate measurements.
 
 ## What it does
 

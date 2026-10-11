@@ -2,6 +2,11 @@
 
 Both attempted `session-window-debug` runs are public. They ran locally through Harbor 0.24.0 and Docker, then were uploaded to Harbor Hub. This is one selected task, not the 66-task benchmark, a leaderboard score, a Windows MXC test, or a Codex/Claude comparison.
 
+The [maintainer-run evaluation request](https://github.com/harbor-framework/terminal-bench/issues/2227)
+has been submitted; acceptance is pending. See [the request text](MAINTAINER_REQUEST.md)
+and [the published upstream comparison snapshot](leaderboard-comparison.json).
+No additional paid model calls were made for this handoff.
+
 | Harbor job | Output cap | CLI outcome | Verifier checks passed | Oracle reward | Estimated API cost |
 | --- | ---: | --- | ---: | ---: | --- |
 | [terminal-bench-20261011](https://hub.harborframework.com/jobs/f5a6b5c0-d566-40f8-92ef-4d4f8c9b1e6b) | 2,048 | failed | 2/7 | 0 | Unknown; ≥$0.004183 reported |

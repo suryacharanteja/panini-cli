@@ -5,6 +5,15 @@ official score or ranking yet. Community submissions are currently closed; the
 maintainers must accept and run the evaluation. See the
 [current submission policy](https://github.com/harbor-framework/terminal-bench/blob/main/leaderboard/SUBMIT.md).
 
+The [evaluation request](https://github.com/harbor-framework/terminal-bench/issues/2227)
+was submitted on 2026-10-11; maintainer acceptance is pending. The
+[request text](terminal-bench/MAINTAINER_REQUEST.md) records the frozen inputs,
+failed smoke evidence and outstanding funding/integration requirements.
+All 66 hashes were rechecked and 26 evaluation checks passed during this handoff.
+No additional paid model calls were made, and the original $5 cap remains in effect.
+The [published reference comparison](terminal-bench/leaderboard-comparison.json)
+contains upstream Codex and Claude Code results, not new head-to-head runs.
+
 The existing [custom engineering pilot](pilots/) is separate evidence. Its six
 tasks and 36 attempts cannot be submitted as a Terminal-Bench result.
 
