@@ -1,0 +1,51 @@
+[package]
+name = "mxc_ffi"
+publish = false
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "C ABI over MXC typed APIs for language bindings (e.g. the C# SDK)."
+
+[lib]
+name = "mxc_ffi"
+# cdylib: the shared library language bindings load (mxc_ffi.dll / libmxc_ffi.so
+# / libmxc_ffi.dylib). staticlib: for consumers that link statically. lib: so
+# Rust integration tests can call the `extern "C"` entry points directly.
+crate-type = ["cdylib", "lib"]
+
+[dependencies]
+mxc-sdk = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_ignored = "0.1"
+serde_json = { workspace = true }
+
+[features]
+# WSL Container backend (Windows only). Both sidecars resolve beside the loaded
+# mxc_ffi native library (its runtimes/<rid>/native asset), not beside the
+# application host, so the managed package must stage wxc-wslc-daemon.exe and
+# wslcsdk.dll there.
+wslc = ["mxc-sdk/wslc"]
+# IsolationSession backend (Windows only). Needed by the
+# `attached_console_ffi` example.
+isolation_session = ["mxc-sdk/isolation_session"]
+# Opt-in C# SDK P/Invoke code generation (csbindgen) in build.rs. Off by
+# default so normal builds don't compile csbindgen or write into the source
+# tree. Local C# builds, the Windows x64 pipeline build, and the drift gate
+# enable it when they need generated bindings.
+dotnetsdk = ["dep:csbindgen"]
+# Exposes the debug-only telemetry test seams to language-binding tests.
+test-support = ["mxc-sdk/test-support"]
+
+[dev-dependencies]
+# Gives the FFI tests the policy-key redirector, so they can assert the exact
+# string this layer marshals for each administrative policy state rather than
+# accepting whatever the host machine's real policy happens to produce.
+mxc-sdk = { workspace = true, features = ["test-support"] }
+tempfile.workspace = true
+
+[build-dependencies]
+csbindgen = { version = "1", optional = true }
+
+[target.'cfg(windows)'.build-dependencies]
+cc = "1"
+winresource.workspace = true

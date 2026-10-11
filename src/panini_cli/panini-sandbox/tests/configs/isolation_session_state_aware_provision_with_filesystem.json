@@ -1,0 +1,23 @@
+{
+  "$schema": "../../schemas/stable/mxc-config.schema.1.0.0.json",
+  "version": "1.0.0",
+  "phase": "provision",
+  "containment": "isolation_session",
+  "filesystem": {
+    "readwritePaths": [
+      "C:\\mxc_share_test\\rw"
+    ],
+    "readonlyPaths": [
+      "C:\\mxc_share_test\\ro"
+    ]
+  },
+  "network": {
+    "egress": {
+      "default": "allow"
+    },
+    "ingress": {
+      "default": "allow",
+      "hostLoopback": "allow"
+    }
+  }
+}

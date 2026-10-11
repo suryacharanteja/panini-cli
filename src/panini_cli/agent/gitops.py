@@ -15,6 +15,8 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
+from .shell import safe_environment
+
 # A repository's own config must not run programs during PANINI's bookkeeping.
 SAFE = ["-c", "core.fsmonitor=false", "-c", "core.hooksPath=" + os.devnull, "-c", "diff.external="]
 
@@ -23,17 +25,34 @@ class GitError(Exception):
     pass
 
 
-def _git(root, *args, env=None, check=True):
+def _git(root, *args, env=None, check=True, input_text=None):
+    environment = {**safe_environment(), **(env or {})}
+    # Git add/restore invoke repository-selected clean/smudge/process filters.
+    # Query their names with a fixed read-only command and override them before
+    # any operation. Do not cache: repo config can change between checkpoints.
+    configured = subprocess.run(
+        ["git", *SAFE, "-C", str(root), "config", "--null", "--name-only", "--get-regexp", r"^filter\."],
+        stdin=subprocess.DEVNULL, capture_output=True, text=True, encoding="utf-8", errors="replace",
+        env=environment, timeout=30,
+    )
+    if configured.returncode not in (0, 1):
+        raise GitError("Cannot inspect Git filter configuration safely.")
+    filters = sorted({key.rsplit(".", 1)[0] for key in configured.stdout.split("\0") if key and "." in key})
+    overrides = [argument for driver in filters for suffix, value in (("clean", ""), ("smudge", ""), ("process", ""), ("required", "false"))
+                 for argument in ("-c", f"{driver}.{suffix}={value}")]
+    if args and args[0] == "diff":
+        args = ("diff", "--no-textconv", *args[1:])
     completed = subprocess.run(
-        ["git", *SAFE, "-C", str(root), *args],
+        ["git", *SAFE, "-c", "commit.gpgsign=false", *overrides, "-C", str(root), *args],
         # Never inherit stdin: in app-server mode it is the protocol pipe, and on Windows starting a
         # child that inherits a pipe another thread is blocked reading hangs process creation.
-        stdin=subprocess.DEVNULL,
+        stdin=subprocess.DEVNULL if input_text is None else None,
+        input=input_text,
         capture_output=True,
         text=True,
         encoding="utf-8",
         errors="replace",
-        env={**os.environ, "GIT_TERMINAL_PROMPT": "0", **(env or {})},
+        env=environment,
         timeout=120,
     )
     if check and completed.returncode != 0:

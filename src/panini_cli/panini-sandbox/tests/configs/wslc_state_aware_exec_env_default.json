@@ -1,0 +1,10 @@
+{
+    "$schema": "../../schemas/stable/mxc-config.schema.1.0.0.json",
+    "version": "1.0.0",
+    "phase": "exec",
+    "sandboxId": "{{SANDBOX_ID}}",
+    "process": {
+        "commandLine": "echo \"HOSTCOUNT=[$(env | grep -c '^HOSTNAME=')]\"",
+        "timeout": 30000
+    }
+}

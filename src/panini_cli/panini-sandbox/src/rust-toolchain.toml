@@ -1,0 +1,5 @@
+# Exact public Rust version for reproducible PANINI native builds.
+[toolchain]
+channel = "1.93.0"
+components = ["clippy", "rustfmt"]
+profile = "minimal"

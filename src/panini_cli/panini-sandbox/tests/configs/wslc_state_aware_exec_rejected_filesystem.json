@@ -1,0 +1,13 @@
+{
+    "$schema": "../../schemas/stable/mxc-config.schema.1.0.0.json",
+    "version": "1.0.0",
+    "phase": "exec",
+    "sandboxId": "{{SANDBOX_ID}}",
+    "filesystem": {
+        "readwritePaths": ["C:\\mxc_wslc_sa_test\\rw"]
+    },
+    "process": {
+        "commandLine": "echo unused",
+        "timeout": 30000
+    }
+}

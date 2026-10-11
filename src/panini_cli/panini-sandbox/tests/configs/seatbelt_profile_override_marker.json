@@ -1,0 +1,12 @@
+{
+    "$schema": "../../schemas/stable/mxc-config.schema.1.0.0.json",
+    "version": "1.0.0",
+    "containment": "seatbelt",
+    "process": {
+        "commandLine": "echo OVERRIDE_MARKER_OK",
+        "timeout": 10000
+    },
+    "seatbelt": {
+        "profileOverride": "(version 1)\n;; MXC_OVERRIDE_SENTINEL\n(allow default)\n"
+    }
+}

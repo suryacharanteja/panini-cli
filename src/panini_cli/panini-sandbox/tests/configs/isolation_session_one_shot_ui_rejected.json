@@ -1,0 +1,22 @@
+{
+  "$schema": "../../schemas/stable/mxc-config.schema.1.0.0.json",
+  "version": "1.0.0",
+  "containerId": "isolation-session-one-shot-ui-rejected",
+  "containment": "isolation_session",
+  "ui": {
+    "disable": true
+  },
+  "process": {
+    "commandLine": "echo unreachable",
+    "timeout": 30000
+  },
+  "network": {
+    "egress": {
+      "default": "allow"
+    },
+    "ingress": {
+      "default": "allow",
+      "hostLoopback": "allow"
+    }
+  }
+}

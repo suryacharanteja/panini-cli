@@ -1,0 +1,18 @@
+{
+  "$schema": "../../schemas/stable/mxc-config.schema.1.0.0.json",
+  "version": "1.0.0",
+  "containerId": "CLI-BasicProcessContainer-Test",
+  "containment": "processcontainer",
+  "process": {
+    "commandLine": "python -c \"import sys; print(f'Hello from Python {sys.version}'); print('Container test successful')\"",
+    "timeout": 30000
+  },
+  "filesystem": {
+    "readwritePaths": [
+      "C:\\Users\\AdminUser\\AppData\\Local\\Programs"
+    ]
+  },
+  "ui": {
+    "disable": false
+  }
+}

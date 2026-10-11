@@ -121,7 +121,7 @@ async def test_a_bad_local_turn_escalates_once_to_the_cloud():
     bad_call = {"function": {"name": "nonsense", "arguments": {}}}
     model = routed(lambda request: stream({"message": {"tool_calls": [bad_call]}}, DONE))
     turn = await model.respond("s", [], [])
-    assert turn.text.startswith("cloud:") and model.local_blocked and "unknown tool" in model.escalation
+    assert turn.text.startswith("cloud:") and not model.local_blocked and "unknown tool" in model.escalation
     assert not model.model.startswith("ollama/")
 
 
@@ -137,3 +137,38 @@ async def test_a_good_local_turn_never_touches_the_cloud():
     model = routed(lambda request: stream({"message": {"content": "ok"}}, DONE))
     turn = await model.respond("s", [], [])
     assert turn.text == "ok" and not model.local_blocked
+
+
+@pytest.mark.anyio
+async def test_local_receives_shared_function_tools_and_extensions():
+    captured = []
+    def handler(request):
+        captured.extend(t["function"]["name"] for t in json.loads(request.content)["tools"])
+        return stream({"message": {"content": "ok"}}, DONE)
+    extension = {"type": "function", "name": "mcp__inventory__lookup", "parameters": {"type": "object"}}
+    model = routed(handler)
+    await model.respond("s", [], [*tools.TOOLS, extension, {"type": "web_search"}])
+    assert set(captured) == {t["name"] for t in tools.TOOLS} | {extension["name"]}
+    assert {"apply_patch", "run_command", "terminal_start", "write_file"} <= set(captured)
+
+
+@pytest.mark.anyio
+async def test_invalid_local_turn_uses_selected_capable_cloud_alternative():
+    model = routed(lambda request: stream({"message": {"tool_calls": [
+        {"function": {"name": "unknown", "arguments": {}}}]}}, DONE))
+    model.escalation_model = "gpt-cheap"
+    turn = await model.respond("s", [], [])
+    assert turn.text == "cloud:gpt-cheap"
+
+
+def test_local_failure_circuit_recovers_after_cooldown(monkeypatch):
+    from panini_cli.agent import model as models
+    backend = RoutedModel("ollama/qwen2.5:3b-instruct")
+    monkeypatch.setattr(models.time, "monotonic", lambda: 100)
+    backend.local_blocked = True
+    backend._local_retry_at = 160
+    backend.refresh_local_health()
+    assert backend.local_blocked
+    monkeypatch.setattr(models.time, "monotonic", lambda: 161)
+    backend.refresh_local_health()
+    assert not backend.local_blocked

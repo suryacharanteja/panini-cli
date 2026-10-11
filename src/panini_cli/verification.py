@@ -4,6 +4,8 @@ import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 
+from .filesystem import read_bounded
+
 
 @dataclass(frozen=True)
 class FileCondition:
@@ -16,9 +18,10 @@ def file_receipt(workspace, name):
     path = (root / name).resolve(strict=True)
     if not path.is_relative_to(root) or not path.is_file() or path.stat().st_size > 4 * 1024 * 1024:
         raise ValueError("Readback must be a bounded file inside the selected workspace")
-    content = path.read_bytes()
-    if len(content) > 4 * 1024 * 1024:
-        raise ValueError("File grew beyond the verification budget")
+    try:
+        content = read_bounded(path, root, 4 * 1024 * 1024)
+    except OSError as exc:
+        raise ValueError(str(exc)) from exc
     return {
         "path": str(path.relative_to(root)),
         "bytes": len(content),

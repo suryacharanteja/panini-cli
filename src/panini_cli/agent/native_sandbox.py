@@ -22,7 +22,8 @@ from ctypes import wintypes
 from pathlib import Path
 
 from .native_probe import PROCESS_INFORMATION, STARTUPINFOW, _spec, _system_library, verify_boundary
-from .shell import CommandResult, _WindowsJob, kill_windows_tree
+from ..process import WindowsJob
+from .shell import CommandResult, kill_windows_tree
 
 CREATE_SUSPENDED = 0x00000004
 CREATE_UNICODE_ENVIRONMENT = 0x00000400
@@ -34,9 +35,17 @@ MAX_CHILD_PROCESSES = 64
 MAX_JOB_MEMORY_BYTES = 2 * 1024 * 1024 * 1024
 
 
-def _reject_unsafe_workspace_links(workspace):
+def _reject_unsafe_workspace_links(workspace, *, allow_internal_hardlinks=False):
     """Fail closed on aliases that can redirect a granted path outside the workspace."""
     workspace = Path(workspace).resolve(strict=True)
+    hardlinks = {}
+
+    def protected_alias(path):
+        from .tools import is_secret
+
+        parts = path.relative_to(workspace).parts
+        return bool(parts) and (parts[0].lower() in {".git", ".panini"} or any(is_secret(part) for part in parts))
+
     reparse = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
     for directory, dirs, files in os.walk(workspace, followlinks=False):
         for name in [*dirs, *files]:
@@ -55,13 +64,26 @@ def _reject_unsafe_workspace_links(workspace):
                     continue
                 if target != workspace and not target.is_relative_to(workspace):
                     raise OSError(f"Native sandbox rejects workspace reparse point: {path}")
+                if allow_internal_hardlinks and protected_alias(target):
+                    raise OSError(f"Native sandbox rejects an alias to protected workspace metadata or secrets: {path}")
             if stat.S_ISREG(info.st_mode) and info.st_nlink > 1:
+                if allow_internal_hardlinks and info.st_ino:
+                    hardlinks.setdefault((info.st_dev, info.st_ino), []).append(path)
+                    continue
                 # Granting the workspace would change this file's ACL everywhere it is linked.
                 raise OSError(
                     f"Native sandbox rejects workspace hard link: {path}. Package managers that "
                     "hard-link from a global cache need a copy mode (UV_LINK_MODE=copy, pnpm "
                     "package-import-method=copy), or run the command with scope=host."
                 )
+    for identity, paths in hardlinks.items():
+        # Cargo links its build-script outputs within a project. Accept those
+        # only when every link is accounted for in this same writable boundary.
+        # Global package-cache links and aliases to protected paths fail closed.
+        info = paths[0].stat()
+        if (info.st_dev, info.st_ino) != identity or len(paths) != info.st_nlink or any(protected_alias(p) for p in paths):
+            raise OSError(f"Native sandbox rejects workspace hard link outside its writable boundary or to a protected file: {paths[0]}. "
+                          "Use package-manager copy mode for shared caches.")
 
 
 # A clean scan is reused for a few minutes. Commands run by this sandbox cannot create links
@@ -218,21 +240,21 @@ TOOLCHAIN_COMMANDS = (
 _LAUNCHER_DIRS = {"bin", "cmd", "scripts", "shims"}
 
 
-def toolchain_roots(environ=None):
+def toolchain_roots(environ=None, *, include_system=False):
     """Read-only roots that make the user's toolchains runnable inside the sandbox.
 
-    Each found executable contributes its directory, and the install root above a bin/cmd/
+    Each PATH toolchain contributes its directory, and the install root above a bin/cmd/
     Scripts/shims folder. Roots that would expose a whole profile, a drive, or WindowsApps
     stubs are never granted. PANINI_CLI_SANDBOX_READ adds more roots (';'-separated)."""
     source = os.environ if environ is None else environ
     path = source.get("PATH", "")
     home = Path(source.get("USERPROFILE") or Path.home()).resolve()
     roots = []
-    for name in TOOLCHAIN_COMMANDS:
-        found = shutil.which(name, path=path)
-        if not found:
-            continue
-        folder = Path(found).resolve().parent
+    # A project venv can shadow its base interpreter. Keep both installed
+    # toolchains available without trusting paths in a project's pyvenv.cfg.
+    folders = {Path(found).resolve().parent for entry in path.split(os.pathsep) if entry.strip()
+               for name in TOOLCHAIN_COMMANDS if (found := shutil.which(str(Path(entry) / name)))}
+    for folder in sorted(folders):
         candidates = [folder]
         if folder.name.lower() in _LAUNCHER_DIRS and folder.parent != home / ".local":
             candidates.append(folder.parent)
@@ -250,7 +272,7 @@ def toolchain_roots(environ=None):
             or root in (home / "AppData", home / "AppData" / "Local", home / "AppData" / "Roaming")
             or "windowsapps" in (part.lower() for part in root.parts)
         )
-        if not too_broad and not _readable_by_default(root, source) and root not in chosen:
+        if not too_broad and (include_system or not _readable_by_default(root, source)) and root not in chosen:
             chosen.append(root)
     return tuple(chosen)
 
@@ -379,7 +401,7 @@ async def run_command(command, workspace, timeout, on_output=None):
             )
             if not created:
                 raise OSError(f"Windows sandbox launch failed: {ctypes.get_last_error()}")
-            job = _WindowsJob(
+            job = WindowsJob(
                 info.dwProcessId,
                 max_processes=MAX_CHILD_PROCESSES,
                 max_job_memory=MAX_JOB_MEMORY_BYTES,

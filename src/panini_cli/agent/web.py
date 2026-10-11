@@ -14,6 +14,7 @@ from html.parser import HTMLParser
 import httpx
 
 from . import tools
+from .public_http import PublicTransport, origin
 
 MAX_BYTES = 2 * 1024 * 1024
 MAX_TEXT = 20_000
@@ -71,16 +72,27 @@ def fetch(url, transport=None):
     if not isinstance(url, str) or not re.match(r"^https?://", url, re.IGNORECASE):
         raise tools.ToolError("url must be an absolute http(s) URL.")
     try:
-        with httpx.Client(timeout=TIMEOUT, follow_redirects=True, max_redirects=5, transport=transport,
+        approved = origin(url)
+        with httpx.Client(timeout=TIMEOUT, follow_redirects=False, trust_env=False, transport=transport or PublicTransport(),
                           headers={"User-Agent": "panini-cli (+https://github.com/)"}) as client:
-            with client.stream("GET", url) as reply:
-                data = b""
-                for chunk in reply.iter_bytes():
-                    data += chunk
-                    if len(data) > MAX_BYTES:
-                        break
-                status, kind, final = reply.status_code, reply.headers.get("content-type", ""), str(reply.url)
-    except httpx.HTTPError as exc:
+            for _ in range(6):
+                with client.stream("GET", url) as reply:
+                    if reply.is_redirect:
+                        destination = reply.url.join(reply.headers.get("location", ""))
+                        if origin(destination) != approved:
+                            raise tools.ToolError("Redirect crosses the approved origin. Approve a separate fetch of the destination.")
+                        url = str(destination)
+                        continue
+                    data = bytearray()
+                    for chunk in reply.iter_bytes():
+                        data.extend(chunk[:MAX_BYTES - len(data)])
+                        if len(data) >= MAX_BYTES:
+                            break
+                    status, kind, final = reply.status_code, reply.headers.get("content-type", ""), str(reply.url)
+                    break
+            else:
+                raise tools.ToolError("Too many redirects within the approved origin.")
+    except (httpx.HTTPError, ValueError) as exc:
         raise tools.ToolError(f"Could not fetch {url}: {str(exc)[:200]}") from None
     if not any(t in kind for t in ("text", "html", "json", "xml", "javascript")) and kind:
         return f"{final} returned {status} with non-text content ({kind}); not shown."

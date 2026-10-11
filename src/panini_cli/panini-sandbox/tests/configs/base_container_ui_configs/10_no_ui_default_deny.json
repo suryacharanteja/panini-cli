@@ -1,0 +1,11 @@
+{
+  "$schema": "../../../schemas/stable/mxc-config.schema.1.0.0.json",
+  "version": "1.0.0",
+  "containerId": "UI-Test-10",
+  "containment": "processcontainer",
+  "process": {
+    "commandLine": "cmd.exe /c echo PASS: default-deny process ran",
+    "timeout": 15000
+  },
+  "processContainer": { "capabilities": [] }
+}

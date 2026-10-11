@@ -3,6 +3,7 @@
 import asyncio
 import json
 import os
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -214,15 +215,22 @@ class RoutedModel:
     Backends are created on first use, so a local-only setup never needs an OpenAI key.
     When the local model errors or produces an unusable turn, and the model was chosen by the
     router (not pinned by the user), the same request is retried once on the cloud fallback
-    and local routing is switched off for the rest of the session.
+    and local backend errors open a short session cooldown.
     """
 
     def __init__(self, model, reasoning_effort=None, timeout=180.0, *, escalate=True):
         self.model, self.effort, self.timeout, self.escalate = model, reasoning_effort, timeout, escalate
         self.local_blocked = False
+        self._local_retry_at = 0.0
         self.escalation = None  # Set to a reason each time a local turn moves to the cloud.
+        self.escalation_model = model_router.fallback_model()
         self._cloud = None
         self._local = None
+
+    def refresh_local_health(self):
+        """A failed local attempt opens a bounded circuit, rather than disabling the whole session."""
+        if self.local_blocked and time.monotonic() >= self._local_retry_at:
+            self.local_blocked = False
 
     def switch_model(self, model):
         self.model = model
@@ -232,8 +240,8 @@ class RoutedModel:
         if not (self.escalate and config.is_local(self.model)):
             return False
         self.escalation = f"{self.model}: {reason}"
-        self.local_blocked = True
-        self.model = model_router.fallback_model()
+        # A task-quality failure does not disqualify local for unrelated next turns.
+        self.model = getattr(self, "escalation_model", None) or model_router.fallback_model()
         return True
 
     def _cloud_backend(self):
@@ -257,12 +265,11 @@ class RoutedModel:
         if not config.is_local(self.model):
             return await self._cloud_backend().respond(instructions, items, tools, on_text, output_schema, cache_key)
         from . import ollama
-        from .tools import LOCAL_TOOLS
-
-        # A small model does better with fewer, simpler tools; anything else means escalation.
-        local_tools = [tool for tool in tools if tool.get("name") in LOCAL_TOOLS]
+        # Provider transport capabilities determine tool support, not the task's subject.
+        local_tools = [tool for tool in tools if tool.get("type") == "function"]
         while True:
             streamed = []
+            problem = None
 
             async def watch(item_id, delta, streamed=streamed):
                 streamed.append(delta)
@@ -287,8 +294,9 @@ class RoutedModel:
                 if strong and self.model != strong and ollama.has_model(strong):
                     self.model = strong  # One step up on this machine before paying for the cloud.
                     continue
-                self.local_blocked = True
-                self.model = model_router.fallback_model()
+                self.local_blocked = problem is None
+                self._local_retry_at = time.monotonic() + 60
+                self.model = self.escalation_model
                 return await self._cloud_backend().respond(instructions, items, tools, on_text, output_schema, cache_key)
 
 

@@ -8,17 +8,18 @@ change or runs a command without the host's "accept".
 import asyncio
 import json
 import re
+from collections import deque
 from dataclasses import dataclass, field
-from typing import Protocol
 from uuid import uuid4
 
-from . import codex_sandbox, compaction, gitops, intent, ledger, scout, verify, web, jev_selector, model_router, native_sandbox, patch, receipts, sandbox, tools
+from . import compaction, gitops, ledger, scout, verify, web, jev_selector, model_router, native_sandbox, patch, receipts, tools
 from .config import is_local as config_is_local
 from .hooks import NoHooks
 from .model import ModelError
 from .prompt import instructions
-from .shell import run_command
 from .terminals import Terminals
+from .execution import ExecutionBroker
+from .preview import Previews
 
 DECLINED = "The user declined this action. Do not repeat it unchanged; adjust your approach or ask the user."
 SKIPPED = "Not run: the user declined an earlier action in the same step."
@@ -28,13 +29,6 @@ KEEP_RECENT_OUTPUTS = 6
 OMITTED_ARGUMENTS = '{"omitted": "Earlier tool arguments removed to fit the context window."}'
 # Tools with no approval and no side effects: consecutive calls to them run concurrently.
 READ_TOOLS = frozenset({"read_file", "list_files", "search_files", "search_code"})
-
-
-class Host(Protocol):
-    async def started(self, item: dict) -> None: ...
-    async def delta(self, item_id: str, kind: str, text: str) -> None: ...
-    async def completed(self, item: dict) -> None: ...
-    async def approve(self, item: dict) -> str: ...  # "accept", "decline" or "cancel"
 
 
 class Cancelled(Exception):
@@ -139,15 +133,22 @@ class Agent:
         self.items = []
         self.plan = []
         self.hooks = hooks or NoHooks()
-        self.terminals = Terminals(self.workspace.root, settings)
+        self.execution = ExecutionBroker(self.workspace.root, settings, read_only=bool(getattr(host, "read_only", False)))
+        if hasattr(self.hooks, "broker"):
+            self.hooks.broker = self.execution
+        self.terminals = Terminals(self.workspace.root, settings, broker=self.execution)
+        self.previews = Previews(self.execution)
+        self.previews.terminals = self.terminals
         self.started_session = False
+        self._independent_start = None
         self._routed_user = -2  # Index of the user message the model was last routed for.
         # Applied file changes per turn, newest last: [(path, label, before, after)].
         self.changes = []
         self.cache_key = f"panini-cli-{uuid4().hex}"
         self.usage = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
         self.last_input_tokens = 0  # As reported by the provider for the latest request.
-        self.cost_usd = 0.0  # Priced cloud spend this session.
+        self.cost_usd = 0.0  # Priced model and gateway spend this session.
+        self._active_turn_cost = None
         self.unpriced_calls = 0
         self._budget_warned = False
         self.session_id = uuid4().hex
@@ -156,6 +157,32 @@ class Agent:
         self._active_call_id = None
         self._active_tool = None
         self._active_sandbox = None
+        from .skills import Skills
+
+        self.skills = Skills(self.workspace.root)
+        self.instructions += self.skills.instructions()
+        self.steering = deque(maxlen=32)
+        self.verification_results = []
+        from .workers import Workers
+        self.workers = Workers(self)
+
+    async def start(self):
+        """Shared session startup for CLI and app-server."""
+        from . import userconfig
+        from .mcp import McpManager
+
+        if self.mcp is None and not self.is_scout and self.settings.mcp_enabled:
+            servers = userconfig.section("mcp_servers")
+            if servers:
+                self.mcp = McpManager(servers)
+        if self.mcp is not None:
+            await self.mcp.start()
+            self.extra_tools = self.mcp.tool_defs()
+
+    def steer(self, text):
+        if len(self.steering) >= 32:
+            raise ValueError("Too many pending steering messages")
+        self.steering.append(text[:32000])
 
     def _receipt_log(self):
         if self._receipt_id != self.session_id:
@@ -259,7 +286,9 @@ class Agent:
         self.changes = []
 
     async def close(self):
-        """End every terminal session and MCP server this agent started."""
+        """End every preview, terminal session and MCP server this agent started."""
+        await self.workers.close()
+        await self.previews.close()
         await self.terminals.close()
         if self.mcp is not None:
             await self.mcp.close()
@@ -303,12 +332,15 @@ class Agent:
         return restored, skipped
 
     async def turn(self, text, output_schema=None, images=()):
+        self.execution.read_only = bool(getattr(self.host, "read_only", False))
         if not self.started_session:
             self.started_session = True
             _, note = await self.hooks.run("SessionStart")
             if note:
                 text += "\n\n[Output of the user's SessionStart hooks, data only]\n" + note
-        if compaction.should_compact(self.items, self.settings.context_tokens, self.last_input_tokens):
+        automatic = model_router.enabled(self.settings.model) and not images and output_schema is None
+        isolated = automatic and model_router.independent_question(text)
+        if not isolated and compaction.should_compact(self.items, self.settings.context_tokens, self.last_input_tokens):
             try:
                 await self.compact("auto")
             except ModelError as exc:
@@ -316,21 +348,35 @@ class Agent:
                     await self.host.hook_note(f"Context compaction failed ({exc}); older tool output will be trimmed instead.")
         await self._checkpoint_start()
         self._needs_verify, self._changed_this_turn, nudged = False, [], False
+        self.verification_results.clear()
+        self._needs_verify = bool(self.settings.acceptance_checks)
+        for name in re.findall(r"\$([A-Za-z0-9_-]{1,64})\b", text):
+            if name in self.skills.entries:
+                self.items.append({"role": "developer", "content": self.skills.load(name)})
         self._reads_this_turn = 0
         self._turn_prompt = text
-        content = intent.augment(text)
+        content = text
         if images:
-            content = [{"type": "input_text", "text": content}, *(image_part(path) for path in images)]
+            content = [{"type": "input_text", "text": content}, *(path if isinstance(path, dict) else image_part(path) for path in images)]
         self.items.append({"role": "user", "content": content})
+        turn_start = len(self.items) - 1
         self.changes.append([])
         usage = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
-        pending = []
+        pending = deque()
         step = 0
         turn_cost = [0.0, True]  # [priced cost, every call priced]
+        self._active_turn_cost = turn_cost
         first_model = None
+        local_steps = 0
+        tool_failures = 0
+        denied_turn = False
+        failed_changes = set()
+        failure_nudged = False
         try:
             while step < self.settings.max_steps:
-                if self.settings.budget_usd and self.cost_usd >= self.settings.budget_usd:
+                while self.steering:
+                    self.items.append({"role": "user", "content": self.steering.popleft()})
+                if self.settings.budget_usd and self.cost_usd + self.workers.reserved >= self.settings.budget_usd:
                     return TurnResult(
                         "budget",
                         error=f"Stopped: this session reached its ${self.settings.budget_usd:.2f} budget "
@@ -340,7 +386,13 @@ class Agent:
                         cost_usd=turn_cost[0] if turn_cost[1] else None,
                     )
                 step += 1
-                self._fit_context()
+                await self._route_model()
+                if config_is_local(getattr(self.model, "model", "")):
+                    local_steps += 1
+                    if local_steps > 6 and not denied_turn and hasattr(self.model, "force_escalate"):
+                        self.model.force_escalate("local attempt exceeded six model steps; continuing with existing tool evidence")
+                if self._independent_start is None or not config_is_local(getattr(self.model, "model", "")):
+                    self._fit_context()
                 response = await self._respond(output_schema)
                 _add_usage(usage, response.usage)
                 self.last_input_tokens = int(response.usage.get("input_tokens") or 0)
@@ -348,23 +400,64 @@ class Agent:
                 first_model = first_model or model_id
                 await self._account(model_id, response.usage, turn_cost)
                 self.items.extend(response.items)
-                if not response.calls and self._ungrounded_local_answer():
+                if self.steering and not response.calls:
+                    continue  # A correction arriving during generation must get a model step.
+                if not response.calls and not denied_turn and self._ungrounded_local_answer():
                     del self.items[-len(response.items):]
                     if self.model.force_escalate("answered about a file it did not read"):
                         continue
-                if not response.calls and self._claims_unmade_changes(response.text):
+                if not response.calls and not denied_turn and self._claims_unmade_changes(response.text):
                     # The local model reported edits that never happened: discard that answer and
                     # let the cloud model redo the request from the same history.
                     del self.items[-len(response.items):]
                     if self.model.force_escalate("claimed changes it did not make"):
                         continue
-                if not response.calls and self._needs_verify and not nudged and verify.enabled():
-                    found = verify.commands(self.workspace.root)
-                    if found:
-                        nudged = True
-                        self.items.append({"role": "developer", "content": verify.reminder(self._changed_this_turn, found)})
+                found = verify.commands(self.workspace.root) + list(self.settings.acceptance_checks)
+                if not response.calls and failed_changes and not denied_turn:
+                    if not failure_nudged:
+                        failure_nudged = True
+                        self.items.append({"role": "developer", "content":
+                            "[PANINI execution check] These file changes failed: " + ", ".join(sorted(failed_changes)) +
+                            ". Read the current files and recover using exact text, or report that the task remains incomplete. "
+                            "A failed edit is not a completed change."})
+                        continue
+                    return TurnResult("unverified", error="File changes remain unsuccessful: " + ", ".join(sorted(failed_changes)),
+                                      text="The requested changes could not be completed. Review the failed file actions.",
+                                      usage=usage, steps=step, cost_usd=turn_cost[0] if turn_cost[1] else None)
+                if not response.calls and not denied_turn and self._needs_verify and found and not nudged and verify.enabled():
+                    nudged = True
+                    self.items.append({"role": "developer", "content": verify.reminder(self._changed_this_turn, found)})
+                    continue
+                if (not response.calls and not denied_turn and self._needs_verify and found and nudged and verify.enabled()
+                        and hasattr(self.model, "force_escalate")):
+                    if self.model.force_escalate("finished edited work without a successful verification command"):
                         continue
                 if not response.calls:
+                    if self._needs_verify and found and not denied_turn and verify.enabled():
+                        return TurnResult("unverified", response.text, error="Changes lack a successful project acceptance check.",
+                                          usage=usage, steps=step, cost_usd=turn_cost[0] if turn_cost[1] else None)
+                    if (not denied_turn and model_router.enabled(self.settings.model) and config_is_local(getattr(self.model, "model", ""))
+                            and hasattr(self.model, "force_escalate")
+                            and any(i.get("type") == "function_call_output" for i in self.items[turn_start:])):
+                        from . import completion
+                        checked = await asyncio.to_thread(completion.check, text, response.text, self.items[turn_start:])
+                        if checked.cost_usd:
+                            self.cost_usd += checked.cost_usd
+                            turn_cost[0] += checked.cost_usd
+                            ledger.record("call", session=self.session_id, workspace=str(self.workspace.root),
+                                          model="typesafe-ai/jev", purpose="completion", cost_usd=checked.cost_usd,
+                                          input_tokens=checked.input_tokens, output_tokens=0)
+                        if checked.accepted is not None and hasattr(self.host, "model_route"):
+                            await self.host.model_route(model_router.RouteDecision(
+                                self.model.model, "validation:accepted" if checked.accepted else "validation:retry", False,
+                                cost_usd=checked.cost_usd, input_tokens=checked.input_tokens))
+                        if checked.accepted is False:
+                            if self.model.force_escalate("completion did not satisfy the request or match tool evidence"):
+                                del self.items[-len(response.items):]
+                                self.items.append({"role": "developer", "content":
+                                    "The previous answer failed completion checking. Recheck the original request against tool evidence; "
+                                    "preserve applied work and correct unsupported or incomplete conclusions."})
+                                continue
                     _, note = await self.hooks.run("TurnEnd", result=response.text)
                     if note and hasattr(self.host, "hook_note"):
                         await self.host.hook_note(note)
@@ -373,14 +466,14 @@ class Agent:
                         "completed", response.text, usage=usage, steps=step,
                         cost_usd=turn_cost[0] if turn_cost[1] else None,
                     )
-                pending = [call.call_id for call in response.calls]
+                pending = deque(call.call_id for call in response.calls)
                 declined = False
-                calls = list(response.calls)
+                calls = deque(response.calls)
                 while calls:
-                    batch = [calls.pop(0)]
+                    batch = [calls.popleft()]
                     if batch[0].name in READ_TOOLS:
                         while calls and calls[0].name in READ_TOOLS:
-                            batch.append(calls.pop(0))
+                            batch.append(calls.popleft())
                     if declined:
                         results = [(SKIPPED, True)] * len(batch)
                     elif len(batch) == 1:
@@ -389,10 +482,28 @@ class Agent:
                         results = await asyncio.gather(*(self._tool(call) for call in batch))
                     for call, (output, was_declined) in zip(batch, results, strict=True):
                         declined = declined or was_declined
+                        denied_turn = denied_turn or was_declined or output.startswith("Blocked by")
                         self.items.append(
                             {"type": "function_call_output", "call_id": call.call_id, "output": output}
                         )
-                        pending.remove(call.call_id)
+                        pending.popleft()
+                        if call.name in {"edit_file", "write_file", "apply_patch"} and not was_declined:
+                            try:
+                                arguments = call.arguments if isinstance(call.arguments, dict) else json.loads(call.arguments or "{}")
+                            except (ValueError, TypeError):
+                                arguments = {}
+                            if not isinstance(arguments, dict):
+                                arguments = {}
+                            label = str(arguments.get("path") or "patch")
+                            if output.startswith("Error:"):
+                                failed_changes.add(label)
+                            else:
+                                failed_changes.discard(label)
+                                failed_changes.difference_update(self._changed_this_turn)
+                        if not was_declined and (output.startswith("Error:") or re.match(r"Exit code: [1-9]", output)):
+                            tool_failures += 1
+                    if tool_failures >= 2 and not denied_turn and hasattr(self.model, "force_escalate"):
+                        self.model.force_escalate("repeated tool failures; continuing from recorded results")
             self._turn_record("incomplete", first_model, step, turn_cost)
             return TurnResult(
                 "incomplete",
@@ -412,6 +523,7 @@ class Agent:
             self._turn_record("failed", first_model, step, turn_cost)
             return TurnResult("failed", error=str(exc), usage=usage, steps=step)
         finally:
+            self._active_turn_cost = None
             _add_usage(self.usage, usage)
             await self._checkpoint_end()
 
@@ -425,10 +537,11 @@ class Agent:
                 await self.host.started(dict(message))
             await self.host.delta(message["id"], "agentMessage", delta)
 
+        independent = config_is_local(getattr(self.model, "model", "")) and self._independent_start is not None
         response = await self.model.respond(
             self.instructions,
-            self.items,
-            self.tool_defs(),
+            self.items[self._independent_start:] if independent else self.items,
+            [] if independent else self.tool_defs(),
             on_text=on_text,
             output_schema=output_schema,
             cache_key=self.cache_key,
@@ -441,7 +554,30 @@ class Agent:
         return response
 
     def tool_defs(self):
-        defs = list(tools.TOOLS) + [web.WEB_FETCH_TOOL] + list(self.extra_tools)
+        # Optional capabilities and session controls become visible when usable.
+        # This keeps ordinary coding requests small without routing by task keywords.
+        hidden = set()
+        if not self.skills.entries:
+            hidden.add("skill_load")
+        if not self.mcp:
+            hidden.update({"mcp_resource_read", "mcp_prompt_get"})
+        if not verify.commands(self.workspace.root) and not self.settings.acceptance_checks:
+            hidden.add("run_check")
+        if self.settings.sandbox != "mxc" or not self.settings.local_preview:
+            hidden.update({"preview_start", "preview_list", "preview_stop"})
+        if not self.workers.entries:
+            hidden.update({"worker_list", "worker_read", "worker_diff", "worker_stop"})
+        if self.settings.sandbox != "mxc":
+            hidden.add("worker_start")
+        if not self.terminals.sessions:
+            hidden.update({"terminal_list", "terminal_read", "terminal_send", "terminal_stop", "terminal_resize"})
+        elif not any(session.tty for session in self.terminals.sessions.values()):
+            hidden.add("terminal_resize")
+        defs = [definition for definition in tools.TOOLS if definition.get("name") not in hidden]
+        optional = {"skill_load", "run_check", "worker_start", "worker_list", "worker_read", "worker_diff", "worker_stop",
+                    "mcp_resource_read", "mcp_prompt_get"}
+        defs.sort(key=lambda definition: definition.get("name") in optional)
+        defs += [web.WEB_FETCH_TOOL, *self.extra_tools]
         current = str(getattr(self.model, "model", ""))
         if web.search_enabled() and current and not config_is_local(current):
             defs.append(web.HOSTED_WEB_SEARCH)
@@ -475,6 +611,9 @@ class Agent:
         if last_user == self._routed_user:
             return
         self._routed_user = last_user
+        self._independent_start = None
+        if hasattr(self.model, "refresh_local_health"):
+            self.model.refresh_local_health()
         content = self.items[last_user].get("content", "") if last_user >= 0 else ""
         prompt = text_of(content)
         current = getattr(self.model, "model", model_router.fallback_model())
@@ -484,8 +623,21 @@ class Agent:
             decision = await asyncio.to_thread(
                 model_router.route, prompt, current, context_tokens, allow_local=allow_local
             )
-        except Exception as exc:  # noqa: BLE001 -- model routing must never block the CLI.
-            decision = model_router.RouteDecision(current, f"router-error:{str(exc)[:120]}", False)
+        except Exception:  # noqa: BLE001 -- model routing must never block the CLI.
+            decision = model_router.RouteDecision(current, "router-error:keeping current model", False)
+        if decision.cost_usd is not None and decision.cost_usd > 0:
+            from . import ledger
+
+            self.cost_usd += decision.cost_usd
+            if self._active_turn_cost is not None:
+                self._active_turn_cost[0] += decision.cost_usd
+            ledger.record("call", session=self.session_id, workspace=str(self.workspace.root),
+                          model="typesafe-ai/jev", input_tokens=decision.input_tokens,
+                          output_tokens=0, cost_usd=decision.cost_usd)
+        if decision.context_policy == "independent" and last_user >= 0:
+            self._independent_start = last_user
+        if decision.escalation_model and hasattr(self.model, "escalation_model"):
+            self.model.escalation_model = decision.escalation_model
         if decision.changed:
             self.model.switch_model(decision.model)
             self.cache_key = f"panini-cli-{uuid4().hex}"
@@ -520,6 +672,7 @@ class Agent:
                     return
 
     async def _tool(self, call):
+        self.execution.read_only = bool(getattr(self.host, "read_only", False))
         """Returns (output for the model, whether the user declined), with hooks around it."""
         receipt = self._receipt_log()
         try:
@@ -577,7 +730,16 @@ class Agent:
                 self._active_sandbox = None
 
     async def _run_tool(self, call, arguments):
+        if self.allowed_tools is not None and call.name not in self.allowed_tools:
+            return "Error: this worker is not allowed to use that tool.", False
         try:
+            definition = next((entry for entry in tools.TOOLS if entry.get("name") == call.name), None)
+            if definition:
+                keys = definition["parameters"]["properties"]
+                unknown = set(arguments) - keys.keys()
+                if unknown:
+                    raise tools.ToolError("Invalid argument names: " + ", ".join(sorted(unknown)) +
+                                          ". Use these exact JSON keys: " + ", ".join(keys))
             if call.name in ("read_file", "list_files", "search_files", "search_code"):
                 return await self._read(call.name, arguments), False
             if call.name == "apply_patch":
@@ -586,6 +748,49 @@ class Agent:
                 return await self._change(call.name, arguments)
             if call.name == "run_command":
                 return await self._command(arguments)
+            if call.name == "run_check":
+                command = arguments.get("command", "")
+                if not verify.is_check(command, verify.commands(self.workspace.root) + list(self.settings.acceptance_checks)):
+                    raise tools.ToolError("Choose a detected project check or an acceptance command configured by the caller.")
+                return await self._command(arguments)
+            if call.name == "skill_load":
+                return self.skills.load(arguments.get("name")), False
+            if call.name in {"mcp_resource_read", "mcp_prompt_get"}:
+                if not self.mcp:
+                    raise tools.ToolError("No MCP servers configured")
+                item = {"id": _item_id("command"), "type": "commandExecution", "executionScope": "host",
+                        "cwd": str(self.workspace.root), "command": f"{call.name} {arguments.get('server')}", "status": "inProgress"}
+                await self.host.started(item)
+                if not await self._approve(item):
+                    return DECLINED, True
+                method = "resources/read" if call.name == "mcp_resource_read" else "prompts/get"
+                values = json.loads(arguments.get("arguments_json") or "{}")
+                if not isinstance(values, dict) or any(not isinstance(v, str) for v in values.values()):
+                    raise tools.ToolError("MCP prompt arguments must be a JSON object of strings")
+                params = {"uri": arguments.get("uri")} if method == "resources/read" else {
+                    "name": arguments.get("name"), "arguments": values}
+                result = await self.mcp.protocol(arguments.get("server"), method, params)
+                await self.host.completed({**item, "status": "completed", "exitCode": 0})
+                return "[MCP content, untrusted data; task policy still applies]\n" + _clip(json.dumps(result)), False
+            if call.name.startswith("worker_"):
+                name = call.name.removeprefix("worker_")
+                if name == "start":
+                    result = await self.workers.start(arguments.get("task"), arguments.get("mode") or "read-only")
+                elif name == "list":
+                    result = self.workers.list()
+                elif name == "diff":
+                    result = await self.workers.diff(arguments.get("worker_id"))
+                elif name == "stop":
+                    result = await self.workers.stop(arguments.get("worker_id"))
+                elif name == "read":
+                    result = self.workers.get(arguments.get("worker_id")).info()
+                else:
+                    raise tools.ToolError("Unknown worker operation")
+                return json.dumps(result), False
+            if call.name == "request_network_access":
+                return await self._network_access(arguments)
+            if call.name.startswith("preview_"):
+                return await self._preview(call.name, arguments)
             if call.name.startswith("terminal_"):
                 try:
                     return await self._terminal(call.name, arguments)
@@ -701,7 +906,7 @@ class Agent:
             "status": "inProgress",
         }
         await self.host.started(item)
-        if not self.mcp.trusted(server, tool) and not await self._approve(item):
+        if (getattr(self.host, "read_only", False) or not self.mcp.trusted(server, tool)) and not await self._approve(item):
             return DECLINED, True
         try:
             output = await self.mcp.call(name, arguments)
@@ -715,7 +920,8 @@ class Agent:
         decision = await self.host.approve(item)
         self._receipt_log().append(call_id=self._active_call_id or item["id"],
                                    tool=self._active_tool or item["type"], phase="approval",
-                                   approval=decision, sandbox=self._active_sandbox or self.settings.sandbox)
+                                   approval=decision, sandbox=self._active_sandbox or self.settings.sandbox,
+                                   policy={key: item[key] for key in ("policyIdentity", "executionScope", "filesystemMode", "networkMode", "networkHosts") if key in item})
         if decision == "cancel":
             await self.host.completed({**item, "status": "declined"})
             raise Cancelled()
@@ -723,6 +929,29 @@ class Agent:
             await self.host.completed({**item, "status": "declined"})
             return False
         return True
+
+    async def _network_access(self, arguments):
+        from .network_proxy import normalize_hosts
+
+        if self.settings.sandbox != "mxc":
+            return "Network-only exceptions require Microsoft MXC; host execution was not requested.", False
+        hosts = arguments.get("hosts")
+        if not isinstance(hosts, list) or not hosts or len(hosts) > 20 or any(not isinstance(h, str) for h in hosts):
+            raise tools.ToolError("hosts must contain 1-20 exact HTTPS DNS host names.")
+        try:
+            normalized = normalize_hosts(hosts)
+        except ValueError as exc:
+            raise tools.ToolError(str(exc)) from None
+        item = {"id": _item_id("permission"), "type": "commandExecution", "permissionRequest": True,
+                "command": "Grant HTTPS access to " + ", ".join(normalized), "cwd": str(self.workspace.root),
+                "executionScope": "workspace", "networkHosts": list(normalized),
+                "reason": str(arguments.get("reason", ""))[:1000], "status": "inProgress", "taskId": self.cache_key}
+        await self.host.started(item)
+        if not await self._approve(item):
+            return DECLINED, True
+        self.settings.network_hosts = normalize_hosts((*self.settings.network_hosts, *normalized))
+        await self.host.completed({**item, "status": "completed", "exitCode": 0})
+        return "Granted HTTPS hosts for this session: " + ", ".join(normalized) + ". Filesystem isolation remains enforced.", False
 
     async def _change(self, name, arguments):
         ws = self.workspace
@@ -761,14 +990,19 @@ class Agent:
 
     async def _terminal(self, name, arguments):
         sessions = self.terminals
+        if name == "terminal_resize":
+            sessions.resize(str(arguments.get("session_id")), arguments.get("cols"), arguments.get("rows"))
+            return "Terminal resized.", False
         if name == "terminal_read":
             text = await sessions.read(str(arguments.get("session_id")), arguments.get("wait_seconds") or 2)
             terminal = sessions.get(str(arguments.get("session_id")))
             state = "running" if terminal.running else f"ended with exit code {terminal.process.returncode}"
             return f"Session {terminal.id} ({state}). New output:\n{text or '(none)'}", False
         if name == "terminal_stop":
+            terminal = sessions.get(str(arguments.get("session_id")))
             code = await sessions.stop(str(arguments.get("session_id")))
-            return f"Stopped (exit code {code}).", False
+            recovery_note = f" Recovery snapshot: {terminal.snapshot.id}." if terminal.snapshot else ""
+            return f"Stopped (exit code {code}).{recovery_note}", False
         if name == "terminal_start":
             command = arguments.get("command")
             if not isinstance(command, str) or not command.strip():
@@ -796,6 +1030,9 @@ class Agent:
             "executionScope": scope,
             "status": "inProgress",
         }
+        self.execution.read_only = bool(getattr(self.host, "read_only", False))
+        authorization = self.execution.authorization(scope) if name == "terminal_start" else terminal.authorization
+        item.update(authorization, taskId=self.cache_key)
         await self.host.started(item)
         if not await self._approve(item):
             return DECLINED, True
@@ -803,7 +1040,8 @@ class Agent:
             if scope == "host":
                 native_sandbox.invalidate_link_scan(self.workspace.root)
             if name == "terminal_start":
-                terminal = await sessions.start(command, scope=scope)
+                terminal = await sessions.start(command, scope=scope, tty=arguments.get("tty") or False,
+                                                cols=arguments.get("cols") or 100, rows=arguments.get("rows") or 30)
                 session_id = terminal.id
             else:
                 await sessions.send(session_id, text)
@@ -823,6 +1061,52 @@ class Agent:
         )
         state = "running" if terminal.running else f"ended with exit code {terminal.process.returncode}"
         return f"Session {session_id} ({state}). Output:\n{output or '(none yet)'}", False
+
+    async def _preview(self, name, arguments):
+        if name == "preview_list":
+            return json.dumps(self.previews.list()), False
+        if name == "preview_stop":
+            try:
+                await self.previews.stop(str(arguments.get("session_id")))
+            except OSError as exc:
+                raise tools.ToolError(str(exc)) from None
+            return "Preview stopped.", False
+        if name != "preview_start":
+            raise tools.ToolError(f"Unknown preview tool: {name}")
+        if not self.settings.local_preview:
+            raise tools.ToolError("Enable --local-preview to serve built assets, or use panini-cli preview dist after building.")
+        self.execution.read_only = bool(getattr(self.host, "read_only", False))
+        entry = arguments.get("entry")
+        path = entry or arguments.get("path") or "dist"
+        try:
+            authorization = self.execution.authorization()
+        except OSError as exc:
+            raise tools.ToolError(str(exc)) from None
+        item = {"id": _item_id("preview"), "type": "commandExecution", "command": f"{'Run sandbox Node preview' if entry else 'Preview built assets'}: {path}",
+                "cwd": str(self.workspace.root), "status": "inProgress", "taskId": self.cache_key,
+                **authorization}
+        await self.host.started(item)
+        if not await self._approve(item):
+            return DECLINED, True
+        try:
+            if entry:
+                from .live_preview import start_live
+                async with self.previews.lock:
+                    if len(self.previews.sessions) >= 2:
+                        raise ValueError("At most two previews per session")
+                    preview = await start_live(self.previews, self.terminals, entry, arguments.get("args") or [], arguments.get("port") or 5173)
+            else:
+                preview = await self.previews.start(path)
+        except (OSError, ValueError) as exc:
+            await self.host.completed({**item, "status": "failed", "error": str(exc)})
+            return f"Error: {exc}", False
+        output = f"Preview {preview.id}: {preview.server.url}\n{preview.policy['previewMode']} from {preview.path}. Stops when this agent closes."
+        if self._active_call_id:
+            self._receipt_log().append(call_id=self._active_call_id, tool="preview_start", phase="preview_policy",
+                                       sandbox="mxc", policy={**preview.policy, "previewRoot": preview.path})
+        await self.host.completed({**item, "status": "completed", "exitCode": 0, "aggregatedOutput": output,
+                                   "preview": preview.info()})
+        return output, False
 
     _CLAIM = re.compile(
         r"\b(?:has|have) been (?:renamed|updated|changed|fixed|modified|created|added|removed|replaced|refactored)\b"
@@ -850,6 +1134,7 @@ class Agent:
         )
 
     def _note_change(self, labels):
+        self.verification_results.clear()
         self._needs_verify = True
         self._changed_this_turn.extend(label for label in labels if label not in self._changed_this_turn)
 
@@ -885,8 +1170,7 @@ class Agent:
         if not isinstance(command, str) or not command.strip():
             raise tools.ToolError("command must be a non-empty string.")
         scope = command_scope(arguments)
-        mode = "none" if scope == "host" else self.settings.sandbox
-        if mode == "none":
+        if scope == "host" or self.settings.sandbox == "none":
             scope = "host"
         requested = arguments.get("timeout_seconds") or self.settings.command_timeout
         timeout = max(5, min(int(requested), 600))
@@ -898,6 +1182,8 @@ class Agent:
             "executionScope": scope,
             "status": "inProgress",
         }
+        self.execution.read_only = bool(getattr(self.host, "read_only", False))
+        item.update(self.execution.authorization(scope), taskId=self.cache_key)
         await self.host.started(item)
         if not await self._approve(item):
             return DECLINED, True
@@ -905,42 +1191,28 @@ class Agent:
         async def on_output(text):
             await self.host.delta(item["id"], "commandExecution", text)
 
-        container = None
-        argv = None
-        if mode == "docker":
-            container = sandbox.new_name()
-            argv = sandbox.argv(command, self.workspace.root, name=container)
-        elif mode == "codex":
-            try:
-                argv = codex_sandbox.argv(command, self.workspace.root)
-            except RuntimeError as exc:
-                raise tools.ToolError(str(exc)) from None
+        is_check = verify.is_check(command, verify.commands(self.workspace.root) + list(self.settings.acceptance_checks))
+        if is_check:
+            self._needs_verify = True
         try:
-            if mode == "native":
-                result = await native_sandbox.run_command(
-                    command,
-                    self.workspace.root,
-                    timeout,
-                    on_output,
-                )
-            else:
-                result = await run_command(
-                    command,
-                    self.workspace.root,
-                    timeout,
-                    on_output,
-                    environ=sandbox.environment() if container else None,
-                    argv=argv,
-                )
+            result = await self.execution.run(command, timeout, on_output, scope=scope)
         except OSError as exc:
+            if is_check:
+                self.verification_results.append({"command": command, "exitCode": None, "timedOut": False, "error": str(exc)})
             await self.host.completed({**item, "status": "failed", "exitCode": None, "error": str(exc)})
-            return f"Error: the command could not start: {exc}", False
+            return f"Error: command execution failed: {exc}", False
         finally:
-            if container:
-                await asyncio.to_thread(sandbox.remove, container)
             if scope == "host":
                 native_sandbox.invalidate_link_scan(self.workspace.root)
-        self._needs_verify = False  # A command ran after the last change.
+        self._receipt_log().append(call_id=self._active_call_id or item["id"], tool="run_command",
+                                   phase="execution_policy", sandbox=item["sandbox"], policy=result.policy)
+        if is_check:
+            self.verification_results.append({"command": command, "exitCode": result.exit_code,
+                                              "timedOut": result.timed_out, "duration": result.duration})
+        if is_check and result.exit_code == 0 and not result.timed_out:
+            self._needs_verify = any(not any(verify.is_check(r["command"], [check]) and r["exitCode"] == 0 and not r["timedOut"]
+                                                for r in self.verification_results)
+                                     for check in self.settings.acceptance_checks)
         await self.host.completed(
             {
                 **item,
@@ -955,6 +1227,8 @@ class Agent:
             if result.timed_out
             else f"Exit code: {result.exit_code}"
         )
+        if result.recovery_id:
+            status += f"\nRecovery snapshot: {result.recovery_id}. Restore with panini-cli sandbox restore {result.recovery_id}."
         return (
             f"{status}\nDuration: {result.duration:.1f}s\nOutput:\n{_clip(result.output) or '(no output)'}",
             False,

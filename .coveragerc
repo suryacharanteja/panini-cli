@@ -1,0 +1,9 @@
+[run]
+branch = True
+source = panini_cli
+patch = subprocess
+parallel = True
+data_file = build/coverage/.coverage
+
+[report]
+show_missing = True

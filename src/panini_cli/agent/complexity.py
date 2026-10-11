@@ -28,8 +28,7 @@ MILD = (
     "fix", "bug", "error", "broken", "fails", "failing", "traceback", "exception", "crash",
     "test", "add ", "update", "change",
 )
-# Any request to modify files. The small local model is only trusted to answer questions:
-# in the 2026-10-01 eval it claimed edits it never made.
+# Modification signals are observable metadata, not a blanket local-model exclusion.
 EDIT = (
     "rename", "edit", "write", "create", "delete", "remove", "move", "replace", "implement", "refactor",
     "fix", "add ", "update", "change", "modify", "insert", "append", "format", "typo", "install", "commit",
@@ -87,7 +86,7 @@ def estimate(prompt: str, *, context_tokens: int = 0) -> Complexity:
     edits = any(word in text for word in EDIT)
     if edits:
         signals.append("edits")
-    if points <= 0 and size <= 300 and not edits:
+    if points <= 0 and size <= 300:
         tier = "local"
     elif points <= 1:
         tier = "cheap"

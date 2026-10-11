@@ -122,12 +122,12 @@ def prepare(ws, text):
                 raise ToolError(f"{label} already exists; use Update File.")
             changes.append(tools.prepare_write(ws, op["path"], "\n".join(op["lines"]) + "\n"))
         elif op["op"] == "delete":
-            raw = target.read_bytes()
+            raw = ws.read_bytes(target)
             before, _, _ = tools._decode(label, raw)
             diff, _, removed = tools._diff(label, before, "", "update")
-            changes.append(FileChange(target, label, "delete", raw, None, diff, 0, removed))
+            changes.append(FileChange(target, label, "delete", raw, None, diff, 0, removed, ws.root))
         else:
-            raw = target.read_bytes()
+            raw = ws.read_bytes(target)
             before, newline, bom = tools._decode(label, raw)
             after = _update(before, op["hunks"], label)
             if after == before:
@@ -140,6 +140,13 @@ def apply(changes):
     """Apply every change or none: on a failure the files already written are restored."""
     done = []
     try:
+        for change in changes:
+            ws = tools.Workspace(change.workspace) if change.workspace else None
+            if ws:
+                ws.resolve(str(change.path), must_exist=change.before is not None)
+            current = (ws.read_bytes(change.path) if ws else change.path.read_bytes()) if change.path.exists() else None
+            if current != change.before:
+                raise ToolError(f"{change.label} changed after this patch was proposed. Read it again.")
         for change in changes:
             current = change.path.read_bytes() if change.path.exists() else None
             if current != change.before:

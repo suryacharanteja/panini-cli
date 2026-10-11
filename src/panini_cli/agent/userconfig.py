@@ -34,6 +34,9 @@ ENV_KEYS = {
     "model": "PANINI_CLI_MODEL",
     "approval_mode": "PANINI_CLI_APPROVAL_MODE",
     "sandbox": "PANINI_CLI_SANDBOX",
+    "network_hosts": "PANINI_CLI_NETWORK_HOSTS",
+    "recoverable": "PANINI_CLI_RECOVERABLE",
+    "local_preview": "PANINI_CLI_LOCAL_PREVIEW",
     "reasoning_effort": "PANINI_CLI_REASONING_EFFORT",
     "local": "PANINI_CLI_LOCAL",
     "local_model": "PANINI_CLI_LOCAL_MODEL",
@@ -56,7 +59,9 @@ ENV_KEYS = {
 TEMPLATE = '''# PANINI CLI settings. Environment variables and command-line flags override these.
 model = "auto"                 # auto | local | <OpenAI model id> | ollama/<name>
 approval_mode = "ask"          # read-only | ask | edits | auto
-# sandbox = "native"           # none | native | codex | docker
+# sandbox = "mxc"              # mxc | none | native | codex | docker
+# network_hosts = ["registry.npmjs.org", "pypi.org", "files.pythonhosted.org"]
+# recoverable = true           # bounded command snapshots including untracked files
 local_model = "qwen2.5:3b-instruct"
 # budget_usd = 2.0             # stop a session's cloud spend at this amount
 # router_models = ["gpt-5.6-luna:cheap:Fast edits", "gpt-5.6-terra:balanced:Routine coding", "gpt-5.6-sol:strong:Hard work"]
@@ -94,6 +99,8 @@ def load() -> dict:
 
 
 def _as_env(key, value):
+    if key == "network_hosts" and isinstance(value, list):
+        return ",".join(str(host) for host in value)
     if isinstance(value, bool):
         return "1" if value else "0"
     if key == "local" and isinstance(value, str):

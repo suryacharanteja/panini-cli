@@ -1,0 +1,13 @@
+{
+    "$schema": "../../schemas/stable/mxc-config.schema.1.0.0.json",
+    "version": "1.0.0",
+    "phase": "exec",
+    "sandboxId": "wslc:{{SANDBOX_ID}}",
+    "runtimeConfig": {
+        "networkProxy": "http://127.0.0.1:8888"
+    },
+    "process": {
+        "commandLine": "sh -c 'echo HTTP_PROXY=[$HTTP_PROXY] https_proxy=[$https_proxy]'",
+        "timeout": 30000
+    }
+}

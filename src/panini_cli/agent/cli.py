@@ -23,6 +23,7 @@ from .loop import Agent, text_of
 from .model import ModelError, create_model
 from .model_router import actual_model, enabled as model_router_enabled, fallback_model, model_options, routing_options
 from .shell import shell_name
+import contextlib
 
 FOUNDER = os.getenv("PANINI_FOUNDER") or "Charan"
 COMPANY = os.getenv("PANINI_COMPANY") or "PANINI"
@@ -33,7 +34,7 @@ MODES = {
     "auto": "everything pre-approved",
 }
 HELP = "@file attaches a file · /image PATH · /new · /diff · /review · /commit · /compact · /plan shows the plan · /undo reverts the last changes · /power enables fast UAT auto-approval · /approvals MODE · /model NAME switches model · /exit quits · Ctrl+C stops the current task"
-LOCAL_HELP = "Local commands: auth login · auth status · auth logout · doctor · sandbox status · sessions · receipts SESSION_ID"
+LOCAL_HELP = "Local commands: auth login [openai|jev] · auth status · auth logout [openai|jev] · jev setup|status|check · doctor · sandbox status · sessions · receipts SESSION_ID"
 
 WELCOME = r"""
         ____   ___    _   __  ____  _   __  __
@@ -120,7 +121,7 @@ def can_ask():
 
 
 class TerminalHost:
-    """Shows the agent's work and asks before every file change and command."""
+    """Shows work and approves capability exceptions and file changes by mode."""
 
     def __init__(self, console, *, approve_edits=False, approve_all=False, quiet=False):
         from rich.markup import escape
@@ -191,6 +192,14 @@ class TerminalHost:
         if help_text:
             table.add_row("Meaning", help_text)
         table.add_row("Folder", item.get("cwd", ""))
+        if item.get("sandbox"):
+            table.add_row("Backend", item["sandbox"])
+        if item.get("filesystemMode"):
+            table.add_row("Files", item["filesystemMode"])
+        if "networkHosts" in item:
+            table.add_row("Network", "unrestricted host access" if scope == "host" else ", ".join(item["networkHosts"]) or "offline")
+        if item.get("reason"):
+            table.add_row("Reason", item["reason"])
         table.add_row("Command", "")
         table.add_row("", Syntax(item.get("command", ""), "powershell", theme="ansi_dark", word_wrap=True))
         title = "Approval Needed" if approving else "PANINI Action"
@@ -207,9 +216,8 @@ class TerminalHost:
             verb = "Create" if change["kind"]["type"] == "add" else "Edit"
             self.console.print(f"[bold]✎ {verb} {esc(change['path'])}[/]")
             self._diff(change["diff"])
-        elif kind == "commandExecution":
-            if not self.quiet:
-                self._command_card(item)
+        elif kind == "commandExecution" and not self.quiet:
+            self._command_card(item)
 
     async def delta(self, item_id, kind, text):
         if kind == "agentMessage":
@@ -253,11 +261,14 @@ class TerminalHost:
         if self.quiet:
             return
         self.end_line()
-        detail = f"Model selected: {decision.model} ({decision.reason})"
+        label = "Execution selected" if decision.model.startswith("builtin/") else "Model selected"
+        detail = f"{label}: {decision.model} ({decision.reason})"
+        if decision.context_policy == "independent":
+            detail += " · independent question; history retained"
         if decision.confidence:
             detail += f" · confidence {decision.confidence:.0%}"
         if decision.cost_usd is not None:
-            detail += f" · JEV ${decision.cost_usd:.6f}"
+            detail += f" · router ${decision.cost_usd:.6f}"
         self.console.print(f"[dim]  {self.escape(detail)}[/]")
 
     async def plan(self, steps):
@@ -274,6 +285,9 @@ class TerminalHost:
 
     async def approve(self, item):
         change = item["type"] == "fileChange"
+        if self.read_only and not change and not item.get("permissionRequest") and item.get("sandbox") == "mxc" and item.get("filesystemMode") == "read-only" \
+                and item.get("executionScope") == "workspace" and item.get("policyIdentity"):
+            return "accept"
         if self.read_only and not change and self.trust_read_only and approvals.is_trusted(item.get("command", "")) \
                 and item.get("executionScope") == "workspace":
             return "accept"  # Read-only mode still allows sandboxed commands that only read.
@@ -296,6 +310,8 @@ class TerminalHost:
             if item["type"] == "commandExecution":
                 self._command_card(item, approving=True)
             answer = self.console.input(
+                "  Grant these HTTPS hosts for this session? y = yes, n = no [y/N] "
+                if item.get("permissionRequest") else
                 "  Apply this change? y = yes, a = yes to all file changes this session, n = no [y/a/N] "
                 if change else
                 "  Run with Windows host access? y = yes, a = always this command this session, n = no [y/a/N] "
@@ -310,20 +326,26 @@ class TerminalHost:
                 self.approve_edits = True
                 self.console.print("[dim]  File changes are approved for the rest of this session (/approvals ask to undo).[/]")
             else:
-                self.rules.allow(item.get("command", ""))
+                self.rules.allow(item.get("command", ""), item)
             return "accept"
         return "accept" if answer in ("y", "yes") else "decline"
 
     def auto_approved(self, item):
         """Read-only commands, and commands the user said "always" to, run without a prompt."""
         command = item.get("command", "")
-        if self.rules.allowed(command):
+        if item.get("permissionRequest"):
+            return False
+        if self.rules.allowed(command, item):
             self.console.print("[dim]  ✓ approved earlier in this session[/]")
             return True
+        if item.get("executionScope") == "host":
+            return False
+        if item.get("sandbox") == "mxc" and item.get("policyIdentity") and item.get("executionScope") == "workspace":
+            return True  # Kernel-enforced task policy authorizes routine commands.
         if not self.trust_read_only or not approvals.is_trusted(command):
             return False
-        # A repository's own git config can run programs (core.fsmonitor, diff.external), so git
-        # is only trusted inside the sandbox; other read-only commands are trusted anywhere.
+        # A repository's git config can run programs, so legacy trust classification
+        # applies only after the execution scope has been checked.
         sandboxed = item.get("executionScope") == "workspace"
         if not sandboxed and command.strip().lower().startswith("git"):
             return False
@@ -354,7 +376,9 @@ class JsonHost(TerminalHost):
         self.emit("item.completed", item=item)
 
     async def model_route(self, decision):
-        self.emit("model.routed", model=decision.model, reason=decision.reason, confidence=decision.confidence)
+        self.emit("model.routed", model=decision.model, reason=decision.reason, confidence=decision.confidence,
+                  context_policy=decision.context_policy, router_cost_usd=decision.cost_usd,
+                  router_input_tokens=decision.input_tokens, latency_ms=decision.latency_ms)
 
     async def plan(self, steps):
         self.emit("plan.updated", steps=steps)
@@ -366,9 +390,7 @@ class JsonHost(TerminalHost):
         self.emit("context.compacted", reason=reason, tokens_before=before, tokens_after=after, summarizer=by)
 
     async def approve(self, item):
-        if self.approve_all or (item["type"] == "fileChange" and self.approve_edits):
-            decision = "accept"
-        elif item["type"] != "fileChange" and self.auto_approved(item):
+        if self.approve_all or (item["type"] == "fileChange" and self.approve_edits) or item["type"] != "fileChange" and self.auto_approved(item):
             decision = "accept"
         else:
             decision = "decline"  # Nobody can answer a prompt in JSON mode; use -a to pre-approve.
@@ -379,10 +401,8 @@ class JsonHost(TerminalHost):
 def _utf8_streams():
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure") and (stream.encoding or "").lower().replace("-", "") != "utf8":
-            try:
+            with contextlib.suppress(ValueError):
                 stream.reconfigure(encoding="utf-8", errors="replace")
-            except ValueError:
-                pass
 
 
 def _options(subcommand):
@@ -413,10 +433,14 @@ def _options(subcommand):
     )
     parser.add_argument(
         "--sandbox",
-        choices=["none", "native", "codex", "docker"],
-        help="none is local; native is PANINI's experimental Windows sandbox; codex/docker are optional adapters",
+        choices=["mxc", "none", "native", "codex", "docker"],
+        help="mxc is the Windows default; none explicitly grants host access; native/codex/docker are adapters",
         **unset,
     )
+    parser.add_argument("--network-host", action="append", metavar="HOST", help="grant MXC access to one exact HTTPS host (repeatable)", **unset)
+    parser.add_argument("--recoverable", action="store_true", help="snapshot project files before commands for conflict-aware recovery", **unset)
+    parser.add_argument("--local-preview", action="store_true", help="allow authenticated read-only previews of built web assets", **unset)
+    parser.add_argument("--check", action="append", metavar="COMMAND", help="explicit project acceptance command (repeatable)", **unset)
     parser.add_argument(
         "--approve-edits",
         action="store_true",
@@ -441,6 +465,7 @@ def build_parser():
     )
     parser.add_argument("--version", action="version", version=f"panini-cli {VERSION}")
     commands = parser.add_subparsers(dest="command", metavar="COMMAND")
+    commands.add_parser("licenses", help="print bundled license and redistribution notices")
     run = commands.add_parser("exec", parents=[_options(True)], help="run one task and exit")
     run.add_argument("prompt", nargs="+", help="what to do; - reads the task from stdin")
     run.add_argument("-q", "--quiet", action="store_true", help="show only changes, commands and the answer")
@@ -463,26 +488,59 @@ def build_parser():
     hook.add_argument(
         "--trust", action="store_true", help="trust this project's .panini/hooks.json as it is now"
     )
-    server = commands.add_parser("app-server", help="serve PANINI's coding protocol on stdio")
+    server = commands.add_parser("app-server", parents=[_options(True)], help="serve PANINI's coding protocol on stdio")
     server.add_argument("--stdio", action="store_true", required=True)
     commands.add_parser("doctor", parents=[_options(True)], help="check configuration and model access")
     commands.add_parser("models", help="show the model router: local model, cloud tiers and Jev")
     route_command = commands.add_parser("route", help="dry-run the router: which model would this task get?")
     route_command.add_argument("prompt", nargs="+", help="the task to route")
     commands.add_parser("mcp-server", help="serve PANINI's router and agent as MCP tools on stdio")
+    commands.add_parser("skills", parents=[_options(True)], help="list discovered skill metadata without loading full instructions")
+    mcp = commands.add_parser("mcp", help="authenticate configured remote MCP servers")
+    mcp_commands = mcp.add_subparsers(dest="mcp_command", required=True)
+    mcp_commands.add_parser("list", help="list server names and transport types, without credentials")
+    mcp_login = mcp_commands.add_parser("login", help="OAuth PKCE login or store a bearer token in Credential Manager")
+    mcp_login.add_argument("server")
+    mcp_login.add_argument("--token-stdin", action="store_true")
+    mcp_login.add_argument("--no-browser", action="store_true")
+    mcp_logout = mcp_commands.add_parser("logout", help="remove stored MCP credentials")
+    mcp_logout.add_argument("server")
     jev_command = commands.add_parser("jev", help="manage the Jev routing sidecar")
     jev_commands = jev_command.add_subparsers(dest="jev_command", required=True)
     jev_commands.add_parser("setup", help="install the sidecar into ~/.panini/jev (needs Node.js and npm)")
-    jev_commands.add_parser("status", help="show whether Jev routing is ready")
+    jev_commands.add_parser("status", help="show local Jev requirements (does not contact gateway)")
+    jev_commands.add_parser("check", help="verify Jev gateway access with a small API request")
     sandbox_command = commands.add_parser("sandbox", help="inspect PANINI's bundled command sandbox")
     sandbox_commands = sandbox_command.add_subparsers(dest="sandbox_command", required=True)
-    sandbox_commands.add_parser("status", help="verify the native Windows boundary without an API key")
-    auth = commands.add_parser("auth", help="manage the OpenAI API key securely")
+    sandbox_commands.add_parser("status", parents=[_options(True)], help="verify the native Windows boundary without an API key")
+    sandbox_commands.add_parser("install", help="install PANINI Sandbox built from the bundled native source")
+    uat_command = sandbox_commands.add_parser("uat", help="run packaged sandbox UAT without Python or a model API key")
+    uat_command.add_argument("--web", action="store_true", help="also install Vite, build/test offline and verify its preview (requires Node.js/npm)")
+    uat_command.add_argument("--features", action="store_true", help="also verify durable RPC, skills, worker, ConPTY and SSR inside MXC (requires Node.js)")
+    uat_command.add_argument("--serve", action="store_true", help="keep the web preview open; requires --web")
+    uat_command.add_argument("--open", action="store_true", help="open the web preview in a browser; requires --web --serve")
+    uat_command.add_argument("--output", default="build", metavar="DIR", help="report and demo folder (default: build)")
+    restore_command = sandbox_commands.add_parser("restore", help="restore a completed command snapshot, preserving later edits")
+    restore_command.add_argument("snapshot")
+    restore_command.add_argument("-C", "--cd", metavar="DIR", default=argparse.SUPPRESS, help="workspace directory to restore")
+    preview_command = commands.add_parser("preview", help="preview a built web output folder without running project code on the host")
+    preview_command.add_argument("path", nargs="?", default="dist", help="built output subdirectory containing index.html (default: dist)")
+    preview_command.add_argument("-C", "--cd", metavar="DIR", default=argparse.SUPPRESS, help="project workspace")
+    preview_command.add_argument("--json", action="store_true", help="emit the preview URL and policy as JSON")
+    preview_command.add_argument("--timeout", type=int, default=3600, help="preview lifetime in seconds, 1-86400 (default: 3600)")
+    preview_command.add_argument("--dev-entry", metavar="FILE", help="run a Node HTTP entry in MXC for SSR/HMR, over pipes without TCP ingress")
+    preview_command.add_argument("--dev-arg", action="append", default=[], help="argument for the Node entry (repeatable; use --dev-arg=--flag)")
+    preview_command.add_argument("--dev-port", type=int, default=5173, help="virtual HTTP port the entry listens on (default: 5173)")
+    auth = commands.add_parser("auth", help="manage OpenAI and Jev API keys securely")
     auth_commands = auth.add_subparsers(dest="auth_command", required=True)
     login = auth_commands.add_parser("login", help="save a key in Windows Credential Manager")
     login.add_argument("--key-stdin", action="store_true", help="read a key from stdin without echo")
-    auth_commands.add_parser("status", help="show whether a key is configured (never prints it)")
-    auth_commands.add_parser("logout", help="remove the saved key")
+    status = auth_commands.add_parser("status", help="show key status for both providers (never prints keys)")
+    logout = auth_commands.add_parser("logout", help="remove the saved key")
+    for action in (login, status, logout):
+        action.add_argument("provider", nargs="?", choices=("openai", "jev"),
+                            default=None if action is status else "openai",
+                            help="API key provider (login/logout default: openai)")
     return parser
 
 
@@ -553,10 +611,10 @@ def router_command(args, console):
         if args.jev_command == "setup":
             try:
                 console.print(f"Jev sidecar installed in {jev_client.setup()}")
-            except (RuntimeError, OSError, subprocess.CalledProcessError) as exc:
+            except (RuntimeError, OSError, subprocess.SubprocessError) as exc:
                 console.print(f"[red]Jev setup failed:[/] {escape(str(exc))}")
                 return 1
-        ready, detail = jev_client.available()
+        ready, detail = jev_client.check() if args.jev_command in {"setup", "check"} else jev_client.available()
         console.print(f"Jev: {'ready — ' if ready else 'not ready — '}{escape(detail)}")
         return 0 if ready else 1
     if args.command == "route":
@@ -574,7 +632,7 @@ def router_command(args, console):
     console.print(f"        {'enabled' if local_enabled() else 'disabled (PANINI_CLI_LOCAL=off)'} · Ollama {ollama.config.ollama_host()}")
     turns, failures = model_router.local_track_record()
     if turns:
-        state = "in use" if model_router.local_is_earning_its_keep() else "paused (too many failures; it comes back as they age out)"
+        state = "task capability is assessed individually; backend errors use a short session cooldown"
         console.print(f"        last {model_router.LEARN_WINDOW_DAYS} days: {turns} local turns, {failures} escalated or failed — {state}")
     for option in model_options():
         console.print(f"{option.tier.capitalize():<7} {option.id}  [dim]{escape(option.description)}[/]")
@@ -608,10 +666,9 @@ def report(console, result, agent=None):
 
 
 async def start_mcp(agent, console):
+    await agent.start()
     if agent.mcp is None:
         return
-    await agent.mcp.start()
-    agent.extra_tools = agent.mcp.tool_defs()
     for name, error in agent.mcp.errors.items():
         console.print(f"[yellow]MCP server {name} did not start:[/] {error}")
     if agent.extra_tools:
@@ -689,6 +746,10 @@ def _session(agent, settings, console, host, runner):
             continue
         if command == "/plan":
             host.plan_now(agent.plan)
+            continue
+        if command == "/skills":
+            for skill in agent.skills.catalog():
+                console.print(f"{skill['name']}: {skill['description']}", markup=False)
             continue
         if command == "/diff":
             text = _workspace_diff(agent)
@@ -774,7 +835,7 @@ def _workspace_diff(agent):
 
 
 def _commit(agent, console, runner):
-    import subprocess
+    from rich.markup import escape
 
     from . import compaction, gitops
 
@@ -802,9 +863,11 @@ def _commit(agent, console, runner):
     if answer not in ("y", "yes"):
         console.print("[dim]Not committed.[/]")
         return
-    subprocess.run(["git", "-C", str(root), "add", "-A"], check=False)
-    done = subprocess.run(["git", "-C", str(root), "commit", "-F", "-"], input=message, text=True, capture_output=True)
-    console.print(done.stdout.strip() or done.stderr.strip())
+    try:
+        gitops._git(root, "add", "-A")
+        console.print(gitops._git(root, "commit", "-F", "-", input_text=message).strip())
+    except (gitops.GitError, OSError) as exc:
+        console.print(f"[red]Commit failed:[/] {escape(str(exc))}")
 
 
 def _local_session_command(command, agent, settings, console, host):
@@ -815,6 +878,15 @@ def _local_session_command(command, agent, settings, console, host):
         doctor(args, console)
         return True
     if lowered == "sandbox status":
+        if settings.sandbox == "mxc":
+            from .execution import ExecutionBroker
+
+            try:
+                facts = asyncio.run(ExecutionBroker(agent.workspace.root, settings).status())
+                console.print(f"Microsoft MXC: {facts}")
+            except (OSError, ValueError) as exc:
+                console.print(f"[red]MXC unavailable:[/] {host.escape(str(exc))}")
+            return True
         ready, reason = native_sandbox.available()
         if ready:
             ready, reason = native_probe.verify_boundary()
@@ -834,47 +906,107 @@ def _local_session_command(command, agent, settings, console, host):
         session_id = normalized.split(maxsplit=1)[1].strip()
         _verify_receipts(console, session_id)
         return True
-    if lowered in {"auth status", "auth login", "auth logout"}:
+    if lowered in {f"auth {action}{provider}" for action in ("status", "login", "logout")
+                   for provider in ("", " openai", " jev")}:
         _interactive_auth(console, lowered)
         return True
+    if lowered in {"jev setup", "jev status", "jev check"}:
+        router_command(argparse.Namespace(command="jev", jev_command=lowered.split()[1]), console)
+        return True
+    if lowered == "jev" or lowered.startswith("jev "):
+        console.print("Jev commands: jev setup · jev status · jev check")
+        return True
     if lowered.startswith("auth "):
-        console.print("[yellow]Auth commands: auth login · auth status · auth logout[/]")
+        console.print("[yellow]Auth commands: auth login [openai|jev] · auth status · auth logout [openai|jev][/]")
         return True
     return False
 
 
 def _interactive_auth(console, command):
-    from .auth import delete_key, read_key, save_key
+    parts = command.split()
+    return auth_command(argparse.Namespace(
+        auth_command=parts[1], provider=parts[2] if len(parts) > 2 else None,
+        key_stdin=False,
+    ), console)
 
+
+def auth_command(args, console):
+    """One credential lifecycle for both CLI and interactive commands."""
+    from .auth import PROVIDERS, delete_key, save_key
+
+    provider = args.provider or "openai"
+    label, variable, target = PROVIDERS[provider]
     try:
-        if command == "auth status":
-            source = (
-                "configured"
-                if configured_key()
-                else ("Windows Credential Manager" if read_key() else "missing")
-            )
-            console.print(f"OpenAI API key: {source}")
-            return
-        if command == "auth logout":
-            removed = delete_key()
-            os.environ.pop("OPENAI_API_KEY", None)
-            console.print("Saved API key removed." if removed else "No saved API key found.")
-            return
-        if not can_ask():
-            console.print("[red]Use an interactive terminal for auth login, or run auth login --key-stdin.[/]")
-            return
-        from getpass import getpass
+        if args.auth_command == "status":
+            return _auth_status(console, args.provider)
+        if args.auth_command == "logout":
+            removed = delete_key(target=target)
+            os.environ.pop(variable, None)
+            if provider == "jev":
+                from ..jev import client as jev_client
 
-        key = getpass("OpenAI API key (hidden): ")
-        ok, message = _validate_login_key(key)
+                jev_client.stop()
+            console.print(f"{label}: saved key removed." if removed else f"{label}: no saved key found.")
+            return 0
+        if args.key_stdin:
+            key = sys.stdin.readline().strip()
+        elif can_ask():
+            from getpass import getpass
+
+            key = getpass(f"{label} API key (hidden): ")
+        else:
+            console.print(f"Use an interactive terminal or auth login {provider} --key-stdin.")
+            return 2
+        ok, message = _validate_provider_key(key, provider)
         if not ok:
             console.print(f"[red]{message}[/]")
-            return
-        save_key(key)
-        os.environ["OPENAI_API_KEY"] = key.strip()
+            return 1
+        save_key(key, target=target)
+        os.environ[variable] = key.strip()
         console.print(message)
+        return _finish_jev_login(console) if provider == "jev" else 0
     except (OSError, UnicodeError, ValueError) as exc:
         console.print(f"[red]Credential error:[/] {exc}")
+        return 2
+
+
+def _finish_jev_login(console):
+    from ..jev import client as jev_client
+
+    # A warm process inherited the old key; restart before verifying a replacement.
+    jev_client.stop()
+    ready, _ = jev_client.available()
+    if not ready and (not jev_client.sidecar_script().is_file()
+                      or not (jev_client.sidecar_script().parent / "node_modules" / "ai").is_dir()):
+        console.print("Installing Jev router dependencies (requires Node.js and npm)…")
+        return router_command(argparse.Namespace(command="jev", jev_command="setup"), console)
+    return router_command(argparse.Namespace(command="jev", jev_command="check"), console)
+
+
+def _auth_status(console, provider=None):
+    from .auth import PROVIDERS, read_key
+
+    configured = False
+    for name in ([provider] if provider else PROVIDERS):
+        label, variable, target = PROVIDERS[name]
+        value = os.getenv(variable, "").strip()
+        source = "configured in environment" if value and not value.startswith("your_") else (
+            "Windows Credential Manager" if os.name == "nt" and read_key(target=target) else "missing"
+        )
+        configured |= source != "missing"
+        console.print(f"{label} API key: {source}")
+        if source == "missing":
+            console.print(f"  Add it: panini-cli auth login {name}")
+    return 0 if configured else 1
+
+
+def _validate_provider_key(key, provider):
+    if provider == "openai":
+        return _validate_login_key(key)
+    value = key.strip()
+    if not value or value.startswith("your_") or "\n" in value or "\r" in value:
+        return False, "Enter a non-empty API key, not a placeholder."
+    return True, "Jev key saved securely. Checking router setup and gateway connection…"
 
 
 def _validate_login_key(key):
@@ -899,27 +1031,43 @@ def _validate_login_key(key):
     return asyncio.run(check())
 
 
-def _verify_receipts(console, session_id):
+def _verify_receipts(console, session_id, export=None):
     try:
         path = receipts.path_for(session_id)
         if not path.is_file():
             console.print(f"[red]No receipts for session {session_id}.[/]")
-            return
+            return 1
         count, head = receipts.verify(path)
+        console.print(f"Verified {count} receipt events for {session_id}. Chain head: {head}")
+        if export:
+            Path(export).write_text(receipts.report(path, session_id, head), encoding="utf-8")
+            console.print(f"Report written to {export}")
+        return 0
     except (ValueError, OSError) as exc:
         console.print(f"[red]Receipt verification failed:[/] {exc}")
-        return
-    console.print(f"Verified {count} receipt events for {session_id}. Chain head: {head}")
+        return 2
+
+
+def _execution_options(settings, args):
+    checks = getattr(args, "check", None)
+    if checks:
+        if len(checks) > 20 or any(not c.strip() or len(c) > 4096 for c in checks):
+            raise ValueError("At most 20 acceptance commands of 1-4096 characters are supported")
+        settings.acceptance_checks = tuple(checks)
+    """Use the same effective sandbox options for launch, status and diagnostics."""
+    return settings.execution_options(sandbox=getattr(args, "sandbox", None),
+        network_hosts=getattr(args, "network_host", None),
+        recoverable=True if getattr(args, "recoverable", False) else None,
+        local_preview=True if getattr(args, "local_preview", False) else None)
 
 
 def doctor(args, console):
     try:
         settings = Settings.from_env(model=getattr(args, "model", None))
+        _execution_options(settings, args)
     except ValueError as exc:
         console.print(f"[red]Configuration error:[/] {exc}")
         return 2
-    if getattr(args, "sandbox", None):
-        settings.sandbox = args.sandbox
     shell = shell_name()
     executable = shutil.which("pwsh") or shutil.which("powershell") or shutil.which("bash") or ""
     console.print(f"panini-cli {VERSION} · Python {sys.version.split()[0]}")
@@ -929,7 +1077,16 @@ def doctor(args, console):
     if model_router_enabled(settings.model):
         options = ", ".join(option.id for option in model_options())
         console.print(f"Auto router: enabled; fallback {fallback_model()}; candidates {options}")
-    if settings.sandbox == "docker":
+    if settings.sandbox == "mxc":
+        from .execution import ExecutionBroker
+
+        try:
+            facts = asyncio.run(ExecutionBroker(Path(getattr(args, "cd", None) or "."), settings).status())
+            console.print(f"Command mode: Microsoft MXC — {facts}")
+        except (OSError, ValueError) as exc:
+            console.print(f"[red]MXC unavailable:[/] {exc}")
+            return 2
+    elif settings.sandbox == "docker":
         ready, reason = sandbox.available()
         console.print(f"Command mode: Docker sandbox — {'available' if ready else reason}")
     elif settings.sandbox == "codex":
@@ -1011,16 +1168,129 @@ def remember(agent, text):
     if not agent.items:
         return
     title = next((text_of(i["content"]) for i in agent.items if i.get("role") == "user"), text)
-    try:
+    with contextlib.suppress(OSError):
         sessions.save(agent.session_id, agent.workspace.root, agent.items, str(title))
-    except OSError:
-        pass
+
+
+def sandbox_command(args, console):
+    if args.sandbox_command == "uat":
+        if (args.serve and not args.web) or (args.open and not (args.web and args.serve)):
+            console.print("Use --web --serve with --open; --serve requires --web.", markup=False)
+            return 2
+        binary = Path(sys.executable) if getattr(sys, "frozen", False) else Path(__file__).resolve().parents[3] / "dist/panini-cli.exe"
+        output = Path(args.output).resolve()
+        try:
+            from .sandbox_uat import main as boundary_uat
+
+            boundary_uat(binary=binary, output=output)
+            if args.features:
+                from .feature_uat import main as feature_uat
+                feature_uat(output)
+            if args.web:
+                from .web_uat import main as web_uat
+
+                web_args = (["--serve"] if args.serve else []) + (["--open"] if args.open else [])
+                web_uat(web_args, binary=binary, output=output)
+            return 0
+        except KeyboardInterrupt:
+            return 130
+        except (AssertionError, OSError, ValueError, subprocess.SubprocessError) as exc:
+            console.print(f"UAT failed: {exc}", markup=False)
+            return 1
+    from . import mxc_runtime, recovery
+    from .execution import ExecutionBroker
+
+    try:
+        if args.sandbox_command == "install":
+            console.print(f"Installed PANINI Sandbox (MXC {mxc_runtime.VERSION} source): {mxc_runtime.install()}")
+            return 0
+        if args.sandbox_command == "restore":
+            restored, conflicts = recovery.restore(args.snapshot, Path(getattr(args, "cd", None) or "."))
+            console.print(f"Restored {len(restored)} files; preserved {len(conflicts)} conflicting later edits.")
+            return 2 if conflicts else 0
+        settings = Settings.from_env()
+        _execution_options(settings, args)
+        if settings.sandbox == "mxc":
+            facts = asyncio.run(ExecutionBroker(Path(getattr(args, "cd", None) or "."), settings).status())
+            console.print(f"Engine: PANINI Sandbox (MXC {mxc_runtime.VERSION} source); {facts['tier']}; no host ACL mutation")
+            console.print(f"Local source build: {facts['runtimeIdentity'][:24]}")
+            console.print("Policy validated: secret exclusions, filesystem permissions, network and UI restrictions.")
+            return 0
+        if settings.sandbox == "none":
+            console.print("Host execution: no operating-system sandbox boundary.")
+            return 0
+        if settings.sandbox in {"docker", "codex"}:
+            adapter = sandbox if settings.sandbox == "docker" else codex_sandbox
+            ready, reason = adapter.available() if settings.sandbox == "docker" else adapter.available(Path(getattr(args, "cd", None) or "."))
+            console.print(f"{settings.sandbox} adapter: {reason}; MXC policy guarantees do not apply.")
+            return 0 if ready else 2
+    except (OSError, ValueError) as exc:
+        console.print(f"[red]Sandbox unavailable:[/] {exc}")
+        return 2
+    ready, reason = native_sandbox.available()
+    if ready:
+        ready, reason = native_probe.verify_boundary()
+    console.print("Engine: PANINI-owned native Windows AppContainer; bundled in PANINI-CLI.exe")
+    console.print(f"Boundary: {'verified' if ready else 'unavailable'} — {reason}")
+    console.print("Docker Desktop and Codex CLI are not required for this engine.")
+    return 0 if ready else 2
+
+
+def preview_command(args, console):
+    from .execution import ExecutionBroker
+    from .preview import Previews
+
+    if not 1 <= args.timeout <= 86400:
+        console.print("[red]Preview timeout must be between 1 and 86400 seconds.[/]")
+        return 2
+
+    async def serve_preview():
+        workspace = Path(getattr(args, "cd", None) or ".").resolve(strict=True)
+        settings = Settings(sandbox="mxc", local_preview=True, terminal_timeout=args.timeout)
+        broker = ExecutionBroker(workspace, settings, read_only=not bool(getattr(args, "dev_entry", None)))
+        facts = await broker.status()
+        previews = Previews(broker)
+        from .terminals import Terminals
+        terminals = previews.terminals = Terminals(workspace, settings, broker=broker)
+        try:
+            if getattr(args, "dev_entry", None):
+                from .live_preview import start_live
+                preview = await start_live(previews, terminals, args.dev_entry, args.dev_arg, args.dev_port)
+            else:
+                preview = await previews.start(args.path)
+            if args.json:
+                import json
+
+                print(json.dumps({"type": "preview.started", **preview.info(), "policy": {**facts, **preview.policy}}), flush=True)
+            else:
+                console.print(f"Preview: {preview.server.url}", markup=False)
+                console.print(f"{preview.policy['previewMode']}: {preview.path}. Local access only; press Ctrl+C to stop.", markup=False)
+            await preview.closed.wait()
+            return 0
+        finally:
+            await previews.close()
+            await terminals.close()
+
+    try:
+        return asyncio.run(serve_preview())
+    except KeyboardInterrupt:
+        return 130
+    except (OSError, ValueError) as exc:
+        console.print(f"Preview unavailable: {exc}", markup=False)
+        return 2
 
 
 def main(argv=None):
     _utf8_streams()
     args = build_parser().parse_args(argv)
-    if args.command not in ("sandbox", "auth", "receipts") or (args.command == "auth" and args.auth_command == "status"):
+    if args.command == "licenses":
+        notices = Path(__file__).resolve().parents[1] / "licenses" / "THIRD_PARTY_NOTICES.txt"
+        if not notices.is_file():
+            print("License notices are missing; run scripts/prepare-beta.py notices before packaging.", file=sys.stderr)
+            return 2
+        print(notices.read_text(encoding="utf-8"), end="")
+        return 0
+    if args.command not in ("sandbox", "auth", "receipts", "preview") or (args.command == "auth" and args.auth_command == "status"):
         try:
             load_panini_env()
         except (OSError, UnicodeError) as exc:
@@ -1047,69 +1317,45 @@ def main(argv=None):
     if args.command == "app-server":
         from .server import serve
 
-        serve()
+        serve(args)
         return 0
     from rich.console import Console
 
     console = Console(highlight=False)
     if args.command == "receipts":
-        path = receipts.path_for(args.session)
-        if not path.is_file():
-            console.print(f"[red]No receipts for session {args.session}.[/]")
-            return 1
-        try:
-            count, head = receipts.verify(path)
-        except (ValueError, OSError) as exc:
-            console.print(f"[red]Receipt verification failed:[/] {exc}")
-            return 2
-        console.print(f"Verified {count} receipt events for {args.session}. Chain head: {head}")
-        if getattr(args, "export", None):
-            Path(args.export).write_text(receipts.report(path, args.session, head), encoding="utf-8")
-            console.print(f"Report written to {args.export}")
-        return 0
+        return _verify_receipts(console, args.session, getattr(args, "export", None))
     if args.command == "sandbox":
-        ready, reason = native_sandbox.available()
-        if ready:
-            ready, reason = native_probe.verify_boundary()
-        console.print("Engine: PANINI-owned native Windows AppContainer; bundled in PANINI-CLI.exe")
-        console.print(f"Boundary: {'verified' if ready else 'unavailable'} — {reason}")
-        console.print("Docker Desktop and Codex CLI are not required for this engine.")
-        return 0 if ready else 2
+        return sandbox_command(args, console)
+    if args.command == "preview":
+        return preview_command(args, console)
     if args.command == "auth":
-        from .auth import delete_key, read_key, save_key
-
+        return auth_command(args, console)
+    if args.command == "skills":
+        from .skills import Skills
+        for skill in Skills(Path(getattr(args, "cd", None) or ".")).catalog():
+            console.print(f"{skill['name']}: {skill['description']}", markup=False)
+        return 0
+    if args.command == "mcp":
+        from . import auth, mcp_auth
+        servers = userconfig.section("mcp_servers")
+        if args.mcp_command == "list":
+            for name, spec in servers.items():
+                console.print(f"{name}: {'HTTPS' if spec.get('url') else 'stdio'}", markup=False)
+            return 0
+        spec = servers.get(args.server)
+        if not isinstance(spec, dict) or not spec.get("url"):
+            console.print("Choose a configured remote MCP server.")
+            return 2
         try:
-            if args.auth_command == "login":
-                if args.key_stdin:
-                    key = sys.stdin.readline().strip()
-                elif sys.stdin.isatty():
-                    from getpass import getpass
-
-                    key = getpass("OpenAI API key (hidden): ")
-                else:
-                    console.print("[red]Use an interactive terminal or auth login --key-stdin.[/]")
-                    return 2
-                ok, message = _validate_login_key(key)
-                if not ok:
-                    console.print(f"[red]{message}[/]")
-                    return 1
-                save_key(key)
-                os.environ["OPENAI_API_KEY"] = key.strip()
-                console.print(message)
-                return 0
-            if args.auth_command == "logout":
-                removed = delete_key()
-                console.print("Saved API key removed." if removed else "No saved API key found.")
-                return 0
-            source = (
-                "configured"
-                if configured_key()
-                else ("Windows Credential Manager" if read_key() else "missing")
-            )
-            console.print(f"OpenAI API key: {source}")
-            return 0 if source != "missing" else 1
-        except (OSError, UnicodeError, ValueError) as exc:
-            console.print(f"[red]Credential error:[/] {exc}")
+            if args.mcp_command == "logout":
+                auth.delete_key(target=mcp_auth.target(args.server, spec))
+                console.print("MCP credential removed.")
+            else:
+                token = sys.stdin.readline(16385).strip() if args.token_stdin else None
+                console.print(mcp_auth.login(args.server, spec, bearer=token, open_browser=not args.no_browser))
+            return 0
+        except (OSError, ValueError, TimeoutError) as exc:
+            console.print(f"MCP authentication failed: {type(exc).__name__}")
             return 2
     if args.command == "doctor":
         return doctor(args, console)
@@ -1119,6 +1365,7 @@ def main(argv=None):
     if not workspace.is_dir():
         console.print(f"[red]{workspace} is not a directory.[/]")
         return 2
+
     if not configured_key() and not os.getenv("PANINI_CLI_SCRIPTED_MODEL") and not local_only_ready():
         if os.name == "nt" and sys.stdin.isatty():
             try:
@@ -1126,21 +1373,7 @@ def main(argv=None):
             except (EOFError, KeyboardInterrupt):
                 answer = "n"
             if answer in ("", "y", "yes"):
-                from getpass import getpass
-
-                from .auth import save_key
-
-                try:
-                    key = getpass("OpenAI API key (hidden): ")
-                    ok, message = _validate_login_key(key)
-                    if not ok:
-                        console.print(f"[red]{message}[/]")
-                        return 2
-                    save_key(key)
-                    os.environ["OPENAI_API_KEY"] = key.strip()
-                    console.print(message)
-                except (OSError, ValueError) as exc:
-                    console.print(f"[red]Credential setup failed:[/] {exc}")
+                if auth_command(argparse.Namespace(auth_command="login", provider="openai", key_stdin=False), console):
                     return 2
         if not configured_key():
             console.print(
@@ -1151,12 +1384,19 @@ def main(argv=None):
         settings = Settings.from_env(
             model=getattr(args, "model", None), reasoning_effort=getattr(args, "reasoning_effort", None)
         )
+        _execution_options(settings, args)
     except ValueError as exc:
         console.print(f"[red]Configuration error:[/] {exc}")
         return 2
-    if getattr(args, "sandbox", None):
-        settings.sandbox = args.sandbox
-    if settings.sandbox == "docker":
+    if settings.sandbox == "mxc":
+        from .execution import ExecutionBroker
+
+        try:
+            asyncio.run(ExecutionBroker(workspace, settings).status())
+        except (OSError, ValueError) as exc:
+            console.print(f"[red]MXC unavailable:[/] {exc}")
+            return 2
+    elif settings.sandbox == "docker":
         ready, reason = sandbox.available()
         if ready:
             console.print(f"[dim]Preparing the sandbox image {sandbox.image()}…[/]")
@@ -1303,7 +1543,9 @@ def main(argv=None):
         # 0 done, 1 failed, 3 stopped at the step limit, 4 stopped by the budget, 130 interrupted.
         return {"completed": 0, "incomplete": 3, "budget": 4, "interrupted": 130}.get(result.status, 1)
     approvals = MODES[host.mode] + (
-        " · commands in a Docker sandbox"
+        " · Microsoft MXC workspace isolation"
+        if settings.sandbox == "mxc"
+        else " · commands in a Docker sandbox"
         if settings.sandbox == "docker"
         else " · commands in the Codex native Windows sandbox"
         if settings.sandbox == "codex"

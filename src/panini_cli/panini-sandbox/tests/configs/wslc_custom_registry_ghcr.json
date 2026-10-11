@@ -1,0 +1,16 @@
+{
+  "$schema": "../../schemas/stable/mxc-config.schema.1.0.0.json",
+  "version": "1.0.0",
+  "containerId": "wslc-ghcr-registry",
+  "containment": "wslc",
+  "process": {
+    "commandLine": "echo 'Image pulled from GHCR' && cat /etc/alpine-release"
+  },
+  "network": {
+    "egress": { "default": "allow" },
+    "ingress": { "default": "allow", "hostLoopback": "allow" }
+  },
+  "wslc": {
+    "image": "ghcr.io/linuxserver/baseimage-alpine:3.21"
+  }
+}

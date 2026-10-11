@@ -18,7 +18,7 @@ from ctypes import wintypes
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from .shell import _WindowsJob
+from ..process import WindowsJob
 
 LOAD_LIBRARY_SEARCH_SYSTEM32 = 0x00000800
 
@@ -234,7 +234,7 @@ def probe(
                 result["reason"] = f"CreateProcessInSandbox failed: {ctypes.get_last_error()}"
             else:
                 if suspended:
-                    job = _WindowsJob(info.dwProcessId)
+                    job = WindowsJob(info.dwProcessId)
                 waited = kernel.WaitForSingleObject(info.hProcess, 5000)
                 if waited != 0:
                     kernel.TerminateProcess(info.hProcess, 1)

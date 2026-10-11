@@ -1,0 +1,18 @@
+{
+    "$schema": "../../schemas/stable/mxc-config.schema.1.0.0.json",
+    "version": "1.0.0",
+    "phase": "provision",
+    "containment": "wslc",
+    "filesystem": {
+        "readwritePaths": ["C:\\mxc_wslc_sa_test\\rw"],
+        "readonlyPaths": ["C:\\mxc_wslc_sa_test\\ro"]
+    },
+    "network": {
+        "egress": { "default": "deny" }
+    },
+    "wslc": {
+        "provision": {
+        "image": "alpine:latest"
+        }
+    }
+}

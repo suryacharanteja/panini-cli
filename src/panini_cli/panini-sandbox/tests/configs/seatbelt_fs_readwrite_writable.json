@@ -1,0 +1,10 @@
+{
+    "$schema": "../../schemas/stable/mxc-config.schema.1.0.0.json",
+    "version": "1.0.0",
+    "containment": "seatbelt",
+    "process": {
+        "commandLine": "echo written > {{TESTDIR}}/rw/out.txt && cat {{TESTDIR}}/rw/out.txt",
+        "timeout": 10000
+    },
+    "filesystem": { "readwritePaths": ["{{TESTDIR}}/rw"] }
+}

@@ -1,0 +1,210 @@
+{
+  "manifest": {
+    "agent_version": "2.1.1b1",
+    "harbor_version": "0.24.0",
+    "model": "gpt-5.6-luna",
+    "budget_usd": 3.5958352,
+    "repeats": 3,
+    "planned_trials": 18,
+    "max_steps": 16,
+    "max_output_tokens_per_call": 2048,
+    "price_per_million_tokens": [
+      0.2,
+      1.2
+    ],
+    "price_source": "PANINI ledger; estimates, not provider invoices",
+    "containment": "Harbor Linux Docker environments",
+    "windows_mxc_tested": false,
+    "dataset": "PANINI custom engineering tasks; not Terminal-Bench",
+    "task_ids": [
+      "fix-add",
+      "fizzbuzz",
+      "pagination-off-by-one",
+      "parse-config",
+      "rename-across-files",
+      "verify-after-diagnostic"
+    ],
+    "wheel_sha256": "3b71762758078de204404b6d67220a1f9d6c20ae8b7c4fc4396c1ae25428d513",
+    "created_at": "2026-10-11T06:23:54.692385+00:00",
+    "adapter_sha256": "a6b773b0963dc0a391379ae6685ff12202f1b1c8e361c92ce6c77d75101548d3",
+    "base_image": "python@sha256:2f17fc044b579bab302c2e8054d3a686e2cb9a83de48e70534b94cd8ebbe06a9",
+    "runtime_image_id": "sha256:0e18cc9cfb96bf942c91ddc0492a4eedbb3d4c8f7bb29a3c7e7ad46f14332f6d",
+    "requirements_sha256": "98e1fcaf017d95e5e7fe0fc6d3133cc0f78bfd37d841c5e320a44bc1b0d4d95c",
+    "tasks_sha256": "40384393fac824bd6cb520802af7e9f480c76729b87be6c1d1759f5c88b91c53",
+    "fixture_revision": 2,
+    "pilot_driver_sha256": "f6339f5376362aad8d39a447da01e0671dcb0aad328a9ca5d179a44bf73d8f98",
+    "reserved_cost_upper_bound_usd": 0.42389440000000006,
+    "forwarded_api_calls": 54,
+    "denied_api_calls": 0
+  },
+  "summary": {
+    "attempted": 7,
+    "solved": 7,
+    "failed": 0,
+    "estimated_cost_usd": 0.0325858,
+    "unpriced_trials": 0,
+    "mean_agent_seconds": 16.842989,
+    "trials_missing_agent_time": 0,
+    "estimated_cost_per_solved_task_usd": 0.004655114285714286,
+    "mean_total_seconds": 27.665142857142857,
+    "trials_with_failed_commands": 2,
+    "cli_completed": 7,
+    "tasks_recovered_after_command_failure": 0
+  },
+  "trials": [
+    {
+      "task": "fix-add",
+      "repetition": 1,
+      "solved": true,
+      "reward": 1.0,
+      "cost_usd_estimated": 0.0050856,
+      "input_tokens": 22266,
+      "output_tokens": 527,
+      "agent_seconds": 16.047654,
+      "total_seconds": 27.0,
+      "turn_status": "completed",
+      "exception_type": null,
+      "recovery": {
+        "failed_commands": 0,
+        "followed_by_successful_command": 0,
+        "unrecovered_commands": 0,
+        "failures_with_successful_same_command_retry": 0
+      },
+      "wheel_sha256": "3b71762758078de204404b6d67220a1f9d6c20ae8b7c4fc4396c1ae25428d513",
+      "task_checksum": "97bb0eea2ba3a33b37d4a8ca207366eb31699dd380342c7d8bb8853a61af3b8c",
+      "task_recovered_after_command_failure": false
+    },
+    {
+      "task": "fizzbuzz",
+      "repetition": 1,
+      "solved": true,
+      "reward": 1.0,
+      "cost_usd_estimated": 0.005567600000000001,
+      "input_tokens": 23566,
+      "output_tokens": 712,
+      "agent_seconds": 17.567801,
+      "total_seconds": 28.156,
+      "turn_status": "completed",
+      "exception_type": null,
+      "recovery": {
+        "failed_commands": 0,
+        "followed_by_successful_command": 0,
+        "unrecovered_commands": 0,
+        "failures_with_successful_same_command_retry": 0
+      },
+      "wheel_sha256": "3b71762758078de204404b6d67220a1f9d6c20ae8b7c4fc4396c1ae25428d513",
+      "task_checksum": "a4a705e2451b23021d58f230c6fda0ed94639011363dc459976e2334f1284277",
+      "task_recovered_after_command_failure": false
+    },
+    {
+      "task": "pagination-off-by-one",
+      "repetition": 1,
+      "solved": true,
+      "reward": 1.0,
+      "cost_usd_estimated": 0.0049096,
+      "input_tokens": 20222,
+      "output_tokens": 721,
+      "agent_seconds": 18.067386,
+      "total_seconds": 28.829,
+      "turn_status": "completed",
+      "exception_type": null,
+      "recovery": {
+        "failed_commands": 1,
+        "followed_by_successful_command": 0,
+        "unrecovered_commands": 1,
+        "failures_with_successful_same_command_retry": 0
+      },
+      "wheel_sha256": "3b71762758078de204404b6d67220a1f9d6c20ae8b7c4fc4396c1ae25428d513",
+      "task_checksum": "02da9bd234f449f97df0b9d588c36dca221ab20fbc2e5ee4e504bef9bfae5632",
+      "task_recovered_after_command_failure": false
+    },
+    {
+      "task": "parse-config",
+      "repetition": 1,
+      "solved": true,
+      "reward": 1.0,
+      "cost_usd_estimated": 0.0061024,
+      "input_tokens": 24674,
+      "output_tokens": 973,
+      "agent_seconds": 21.348764,
+      "total_seconds": 31.656,
+      "turn_status": "completed",
+      "exception_type": null,
+      "recovery": {
+        "failed_commands": 0,
+        "followed_by_successful_command": 0,
+        "unrecovered_commands": 0,
+        "failures_with_successful_same_command_retry": 0
+      },
+      "wheel_sha256": "3b71762758078de204404b6d67220a1f9d6c20ae8b7c4fc4396c1ae25428d513",
+      "task_checksum": "08b8cfa244abb0d1abfea0427510764d86e93ecf1d7d4782eafc9cbc9293124a",
+      "task_recovered_after_command_failure": false
+    },
+    {
+      "task": "rename-across-files",
+      "repetition": 1,
+      "solved": true,
+      "reward": 1.0,
+      "cost_usd_estimated": 0.0047614,
+      "input_tokens": 19709,
+      "output_tokens": 683,
+      "agent_seconds": 15.493688,
+      "total_seconds": 25.703,
+      "turn_status": "completed",
+      "exception_type": null,
+      "recovery": {
+        "failed_commands": 0,
+        "followed_by_successful_command": 0,
+        "unrecovered_commands": 0,
+        "failures_with_successful_same_command_retry": 0
+      },
+      "wheel_sha256": "3b71762758078de204404b6d67220a1f9d6c20ae8b7c4fc4396c1ae25428d513",
+      "task_checksum": "f10c0b07ad69e9f8133db133f4964f0056bd8597011ad3965e949ddf06557a4e",
+      "task_recovered_after_command_failure": false
+    },
+    {
+      "task": "verify-after-diagnostic",
+      "repetition": 1,
+      "solved": true,
+      "reward": 1.0,
+      "cost_usd_estimated": 0.0031342,
+      "input_tokens": 13799,
+      "output_tokens": 312,
+      "agent_seconds": 12.466766,
+      "total_seconds": 24.156,
+      "turn_status": "completed",
+      "exception_type": null,
+      "recovery": {
+        "failed_commands": 1,
+        "followed_by_successful_command": 1,
+        "unrecovered_commands": 0,
+        "failures_with_successful_same_command_retry": 0
+      },
+      "wheel_sha256": "3b71762758078de204404b6d67220a1f9d6c20ae8b7c4fc4396c1ae25428d513",
+      "task_checksum": "32a1bcc41b930224b3198a89ec82a7f6407dbf281c151b0bacec921d7bc36efe",
+      "task_recovered_after_command_failure": false
+    },
+    {
+      "task": "fix-add",
+      "repetition": 2,
+      "solved": true,
+      "reward": 1.0,
+      "cost_usd_estimated": 0.003025,
+      "input_tokens": 13445,
+      "output_tokens": 280,
+      "agent_seconds": 16.908864,
+      "total_seconds": 28.156,
+      "turn_status": "completed",
+      "exception_type": null,
+      "recovery": {
+        "failed_commands": 0,
+        "followed_by_successful_command": 0,
+        "unrecovered_commands": 0,
+        "failures_with_successful_same_command_retry": 0
+      },
+      "wheel_sha256": "3b71762758078de204404b6d67220a1f9d6c20ae8b7c4fc4396c1ae25428d513",
+      "task_checksum": "97bb0eea2ba3a33b37d4a8ca207366eb31699dd380342c7d8bb8853a61af3b8c",
+      "task_recovered_after_command_failure": false
+    }
+  ]
+}

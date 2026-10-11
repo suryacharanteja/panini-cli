@@ -1,0 +1,20 @@
+{
+  "$schema": "../../schemas/stable/mxc-config.schema.1.0.0.json",
+  "version": "1.0.0",
+  "containerId": "CLI-LXC-Filesystem-Test",
+  "containment": "lxc",
+  "process": {
+    "commandLine": "cat /mnt/readonly/test.txt && echo 'write test' > /mnt/readwrite/output.txt"
+  },
+  "lifecycle": {
+    "destroyOnExit": true
+  },
+  "lxc": {
+    "distribution": "alpine",
+    "release": "3.23"
+  },
+  "filesystem": {
+    "readonlyPaths": ["/mnt/readonly"],
+    "readwritePaths": ["/mnt/readwrite"]
+  }
+}

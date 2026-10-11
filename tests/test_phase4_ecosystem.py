@@ -167,18 +167,12 @@ def test_definitions_rank_above_mentions(tmp_path):
 
 # --- learned router -------------------------------------------------------------------------
 
-def test_the_local_tier_pauses_after_repeated_failures(monkeypatch):
+def test_local_track_record_counts_escalations(monkeypatch):
     model_router._learned.update(at=0.0, value=None)
     for index in range(6):
         ledger.record("turn", model="ollama/qwen2.5:3b-instruct", final_model="gpt-5.6-terra", escalated=index < 4, status="completed")
     assert model_router.local_track_record() == (6, 4)
-    assert not model_router.local_is_earning_its_keep()
     model_router._learned.update(at=0.0, value=None)
-
-
-def test_too_little_history_keeps_the_local_tier():
-    model_router._learned.update(at=0.0, value=None)
-    assert model_router.local_is_earning_its_keep()
 
 
 # --- receipts export ------------------------------------------------------------------------

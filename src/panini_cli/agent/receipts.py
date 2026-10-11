@@ -39,7 +39,7 @@ class ReceiptLog:
         self.workspace_digest = digest(str(Path(workspace).resolve()))
         self.sequence, self.previous = verify(self.path)
 
-    def append(self, *, call_id, tool, phase, arguments=None, output=None, approval=None, error=None, sandbox=None):
+    def append(self, *, call_id, tool, phase, arguments=None, output=None, approval=None, error=None, sandbox=None, policy=None):
         record = {
             "version": 1,
             "sequence": self.sequence + 1,
@@ -60,6 +60,8 @@ class ReceiptLog:
             record["error_type"] = type(error).__name__
         if sandbox is not None:
             record["sandbox"] = sandbox
+        if policy:
+            record["policy"] = policy
         record["sha256"] = digest(record)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         # One append and fsync per event: a killed agent retains the last complete event.

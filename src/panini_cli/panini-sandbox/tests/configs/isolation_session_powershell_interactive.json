@@ -1,0 +1,19 @@
+{
+  "$schema": "../../schemas/stable/mxc-config.schema.1.0.0.json",
+  "version": "1.0.0",
+  "containerId": "isolation-session-powershell-interactive",
+  "containment": "isolation_session",
+  "process": {
+    "commandLine": "powershell.exe -NoLogo",
+    "timeout": 0
+  },
+  "network": {
+    "egress": {
+      "default": "allow"
+    },
+    "ingress": {
+      "default": "allow",
+      "hostLoopback": "allow"
+    }
+  }
+}

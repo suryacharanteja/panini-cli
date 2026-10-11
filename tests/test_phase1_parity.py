@@ -83,7 +83,7 @@ async def test_terminal_host_runs_trusted_commands_without_asking():
     assert await host.approve({"type": "commandExecution", "command": "git status", "executionScope": "workspace"}) == "accept"
     # git at host scope is not trusted: a repository's git config can run programs.
     assert await host.approve({"type": "commandExecution", "command": "git status", "executionScope": "host"}) == "decline"
-    assert await host.approve({"type": "commandExecution", "command": "Get-ChildItem", "executionScope": "host"}) == "accept"
+    assert await host.approve({"type": "commandExecution", "command": "Get-ChildItem", "executionScope": "host"}) == "decline"
     assert await host.approve({"type": "commandExecution", "command": "npm test", "executionScope": "workspace"}) == "decline"
 
 

@@ -5,6 +5,10 @@ import os
 from ctypes import wintypes
 
 TARGET = "PANINI-CLI/OpenAI"
+PROVIDERS = {
+    "openai": ("OpenAI", "OPENAI_API_KEY", TARGET),
+    "jev": ("Jev (AI Gateway)", "AI_GATEWAY_API_KEY", "PANINI-CLI/Jev"),
+}
 _GENERIC = 1
 _LOCAL_MACHINE = 2
 _NOT_FOUND = 1168

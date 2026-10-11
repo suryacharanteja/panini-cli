@@ -1,0 +1,1097 @@
+{
+  "format": 1,
+  "components": [
+    {
+      "name": "PANINI CLI",
+      "version": "2.1.1b1",
+      "license": "MIT",
+      "ecosystem": "project",
+      "notice_sha256": "f7aed3e141b17b5dbfdeca4597cc42a4593ae5b9cdc65a69b7be47039445356a"
+    },
+    {
+      "name": "Microsoft MXC",
+      "version": "1.0.0",
+      "license": "MIT",
+      "ecosystem": "native",
+      "notice_sha256": "d9a1b1e30d633d5732ea18e3cba9538d293ebc53e1a9e4e96ab739e0c5c4f1cb"
+    },
+    {
+      "name": "CPython",
+      "version": "3.12.10",
+      "license": "PSF-2.0 and bundled notices",
+      "ecosystem": "runtime",
+      "notice_sha256": "a4771d2216653fca4e3472566a762ba8ce5358f6f6599455fe7cfaceb60d14b3"
+    },
+    {
+      "name": "annotated-types",
+      "version": "0.7.0",
+      "license": "See notice text",
+      "ecosystem": "python",
+      "notice_sha256": "fe1049884b1a0d9342901e88e07f32925d24b3121d9972b6a6805fb9824b095d"
+    },
+    {
+      "name": "anyio",
+      "version": "4.15.1",
+      "license": "MIT",
+      "ecosystem": "python",
+      "notice_sha256": "5361ac9dc58f2ef5fd2e9b09c68297c17f04950909bbc8023bdb82eacf22c2b0"
+    },
+    {
+      "name": "certifi",
+      "version": "2026.1.4",
+      "license": "MPL-2.0",
+      "ecosystem": "python",
+      "notice_sha256": "e93716da6b9c0d5a4a1df60fe695b370f0695603d21f6f83f053e42cfc10caf7"
+    },
+    {
+      "name": "colorama",
+      "version": "0.4.6",
+      "license": "See notice text",
+      "ecosystem": "python",
+      "notice_sha256": "cac35c02686e5d04a5a7140bfb3b36e73aed496656e891102e428886d7930318"
+    },
+    {
+      "name": "distro",
+      "version": "1.9.0",
+      "license": "Apache License, Version 2.0",
+      "ecosystem": "python",
+      "notice_sha256": "cb5e8e7e5f4a3988e1063c142c60dc2df75605f4c46515e776e3aca6df976e14"
+    },
+    {
+      "name": "flatbuffers",
+      "version": "25.12.19",
+      "license": "Apache 2.0",
+      "ecosystem": "python",
+      "notice_sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+    },
+    {
+      "name": "h11",
+      "version": "0.16.0",
+      "license": "MIT",
+      "ecosystem": "python",
+      "notice_sha256": "37db5bb85926db28a427a25867f10b1232003aea1be69ccb851138adb8e6f361"
+    },
+    {
+      "name": "httpcore",
+      "version": "1.0.9",
+      "license": "BSD-3-Clause",
+      "ecosystem": "python",
+      "notice_sha256": "fdcb59154c74cbaba16a11242f7740bea9f23d6feb5547917d8c5f94a80392a5"
+    },
+    {
+      "name": "httpx",
+      "version": "0.28.1",
+      "license": "BSD-3-Clause",
+      "ecosystem": "python",
+      "notice_sha256": "4ec59d544f12b5f539a3a716fd321ac58ccd8030b465221f2c880200cdf28d8d"
+    },
+    {
+      "name": "idna",
+      "version": "3.20",
+      "license": "BSD-3-Clause",
+      "ecosystem": "python",
+      "notice_sha256": "1a9a4f0e3d479a27240ddd59a9137a66ab4a0f9dfdc8ca6188cc0bfd85187f04"
+    },
+    {
+      "name": "jiter",
+      "version": "0.17.0",
+      "license": "MIT",
+      "ecosystem": "python",
+      "notice_sha256": "7c7134b9f7b978c03fca875517cf398db91f19bbb8109b6685e742aa3f57468e"
+    },
+    {
+      "name": "markdown-it-py",
+      "version": "4.0.0",
+      "license": "See notice text",
+      "ecosystem": "python",
+      "notice_sha256": "c0a19eea761372868fd184f4b51389683fa2e1d5ec0767de82641f88f379fa39"
+    },
+    {
+      "name": "mdurl",
+      "version": "0.1.2",
+      "license": "See notice text",
+      "ecosystem": "python",
+      "notice_sha256": "7c605df6e28667a9603118e98274f64a49ce3eed0d26fccce9534a345e0ef955"
+    },
+    {
+      "name": "openai",
+      "version": "2.26.0",
+      "license": "Apache-2.0",
+      "ecosystem": "python",
+      "notice_sha256": "636eb7d79da9bb6d515a4b3fd417aa26679eb3cf16396ddab4bc55fa74e616e4"
+    },
+    {
+      "name": "prompt-toolkit",
+      "version": "3.0.52",
+      "license": "See notice text",
+      "ecosystem": "python",
+      "notice_sha256": "303574d9bdd85c757d6025017942bf17baeedf2778f62bd7f425d07d880f4c4a"
+    },
+    {
+      "name": "pydantic",
+      "version": "2.13.5",
+      "license": "MIT",
+      "ecosystem": "python",
+      "notice_sha256": "a9e186f3ca16b5eef84318e7a701721351a00cb7b8ae3a4394b67b49e3529ef3"
+    },
+    {
+      "name": "pydantic-core",
+      "version": "2.46.5",
+      "license": "MIT",
+      "ecosystem": "python",
+      "notice_sha256": "2afdd30d54b4d62b6f488a6bcc1546e84ec5061f13f4209c03d012348783795a"
+    },
+    {
+      "name": "pygments",
+      "version": "2.21.0",
+      "license": "BSD-2-Clause",
+      "ecosystem": "python",
+      "notice_sha256": "a9d66f1d526df02e29dce73436d34e56e8632f46c275bbdffc70569e882f9f17"
+    },
+    {
+      "name": "python-dotenv",
+      "version": "1.2.2",
+      "license": "BSD-3-Clause",
+      "ecosystem": "python",
+      "notice_sha256": "80619b7049f08c81683ad0e01f08f257a840652dd71ee83146d36658c7d2c2b9"
+    },
+    {
+      "name": "rich",
+      "version": "14.3.3",
+      "license": "MIT",
+      "ecosystem": "python",
+      "notice_sha256": "deed7c17a4318158190a3ea239cc879a5a50271cebb98ae7025f48fbe58dca15"
+    },
+    {
+      "name": "sniffio",
+      "version": "1.3.1",
+      "license": "MIT OR Apache-2.0",
+      "ecosystem": "python",
+      "notice_sha256": "daec0c81776f99a6e05f780aca0761f11f45d72b9c1d3aa59fffd96b4263335f"
+    },
+    {
+      "name": "tqdm",
+      "version": "4.67.3",
+      "license": "MPL-2.0 AND MIT",
+      "ecosystem": "python",
+      "notice_sha256": "fcff87c3a47ce8028a8512aa182d4fcf0ad1c90544ee75cf9b343684cac194de"
+    },
+    {
+      "name": "typing-extensions",
+      "version": "4.16.0",
+      "license": "PSF-2.0",
+      "ecosystem": "python",
+      "notice_sha256": "3b2f81fe21d181c499c59a256c8e1968455d6689d269aa85373bfb6af41da3bf"
+    },
+    {
+      "name": "typing-inspection",
+      "version": "0.4.2",
+      "license": "MIT",
+      "ecosystem": "python",
+      "notice_sha256": "804b59b25f2c31bd278f9202a19ae49a3945aa2664387e2d0a128c7cacc61ec3"
+    },
+    {
+      "name": "wcwidth",
+      "version": "0.6.0",
+      "license": "MIT",
+      "ecosystem": "python",
+      "notice_sha256": "70b98a95a2144eb70af8017fa8c6d95ce247e40867436e8bc649e137fe13d21a"
+    },
+    {
+      "name": "regex",
+      "version": "2026.9.29",
+      "license": "Apache-2.0 AND CNRI-Python",
+      "ecosystem": "python",
+      "notice_sha256": "bff55ef4cdcc8c14ce259f8e8ab60e264418440d6335f4dc138273fbd506144d"
+    },
+    {
+      "name": "pyinstaller",
+      "version": "6.22.3",
+      "license": "GPLv2-or-later with a special exception which allows to use PyInstaller to build and distribute non-free programs (including commercial ones)",
+      "ecosystem": "python",
+      "notice_sha256": "0598064c7d2718e38d7914a7d08343b2fa008e3bea9ebba2aa7a6ffa5900dd64"
+    },
+    {
+      "name": "anstream",
+      "version": "1.0.0",
+      "license": "MIT OR Apache-2.0",
+      "ecosystem": "rust",
+      "notice_sha256": "5adcb518aed38dbd47f61ef0a77aba79792d12dee7e8b8d78f241ec9c19c84a1"
+    },
+    {
+      "name": "anstyle",
+      "version": "1.0.14",
+      "license": "MIT OR Apache-2.0",
+      "ecosystem": "rust",
+      "notice_sha256": "5adcb518aed38dbd47f61ef0a77aba79792d12dee7e8b8d78f241ec9c19c84a1"
+    },
+    {
+      "name": "anstyle-parse",
+      "version": "1.0.0",
+      "license": "MIT OR Apache-2.0",
+      "ecosystem": "rust",
+      "notice_sha256": "5adcb518aed38dbd47f61ef0a77aba79792d12dee7e8b8d78f241ec9c19c84a1"
+    },
+    {
+      "name": "anstyle-query",
+      "version": "1.1.5",
+      "license": "MIT OR Apache-2.0",
+      "ecosystem": "rust",
+      "notice_sha256": "5adcb518aed38dbd47f61ef0a77aba79792d12dee7e8b8d78f241ec9c19c84a1"
+    },
+    {
+      "name": "anstyle-wincon",
+      "version": "3.0.11",
+      "license": "MIT OR Apache-2.0",
+      "ecosystem": "rust",
+      "notice_sha256": "5adcb518aed38dbd47f61ef0a77aba79792d12dee7e8b8d78f241ec9c19c84a1"
+    },
+    {
+      "name": "anyhow",
+      "version": "1.0.103",
+      "license": "MIT OR Apache-2.0",
+      "ecosystem": "rust",
+      "notice_sha256": "6d14e5bfb3154bf33e54d805b9ce36debfb0d91644e6cbc0c197265c284bb285"
+    },
+    {
+      "name": "autocfg",
+      "version": "1.5.1",
+      "license": "Apache-2.0 OR MIT",
+      "ecosystem": "rust",
+      "notice_sha256": "2267768a2824e22d8f87997cfd1c3a71320870aa269197490960685e0986803e"
+    },
+    {
+      "name": "base64",
+      "version": "0.22.1",
+      "license": "MIT OR Apache-2.0",
+      "ecosystem": "rust",
+      "notice_sha256": "0bc2ee00d58ab183539fab6e6344eaafb14e5529ec1738096cdf5bb3efecbc17"
+    },
+    {
+      "name": "bitflags",
+      "version": "2.13.0",
+      "license": "MIT OR Apache-2.0",
+      "ecosystem": "rust",
+      "notice_sha256": "8f1b7d19623b42e90cb47e346a80f94254731eb0c615235621668a5ced723c6c"
+    },
+    {
+      "name": "block-buffer",
+      "version": "0.12.1",
+      "license": "MIT OR Apache-2.0",
+      "ecosystem": "rust",
+      "notice_sha256": "dd4017f6cef582162323eed8db1f871ed1057228e3adc470ea8ed66292af9382"
+    },
+    {
+      "name": "bytes",
+      "version": "1.11.1",
+      "license": "MIT",
+      "ecosystem": "rust",
+      "notice_sha256": "45f522cacecb1023856e46df79ca625dfc550c94910078bd8aec6e02880b3d42"
+    },
+    {
+      "name": "cc",
+      "version": "1.2.64",
+      "license": "MIT OR Apache-2.0",
+      "ecosystem": "rust",
+      "notice_sha256": "faa488900802ab01f1491de4fa97143fffff640a6d179af559f4f21cc4d53cbb"
+    },
+    {
+      "name": "cfg-if",
+      "version": "1.0.4",
+      "license": "MIT OR Apache-2.0",
+      "ecosystem": "rust",
+      "notice_sha256": "faa488900802ab01f1491de4fa97143fffff640a6d179af559f4f21cc4d53cbb"
+    },
+    {
+      "name": "cfg_aliases",
+      "version": "0.2.1",
+      "license": "MIT",
+      "ecosystem": "rust",
+      "notice_sha256": "71378756fdf2a30940f9c2cff76b43b1e712c34db54076260ff6e15ebafef907"
+    },
+    {
+      "name": "chrono",
+      "version": "0.4.45",
+      "license": "MIT OR Apache-2.0",
+      "ecosystem": "rust",
+      "notice_sha256": "946c9835d8034d24404f8cfec5f4654cee5dad17e944afc3d06d742cf2882831"
+    },
+    {
+      "name": "cidr",
+      "version": "0.3.2",
+      "license": "MIT",
+      "ecosystem": "rust",
+      "notice_sha256": "c1f40c17f2f407656c9934898e3c40573581346251dba68158742af4275eb66d"
+    },
+    {
+      "name": "clap",
+      "version": "4.6.1",
+      "license": "MIT OR Apache-2.0",
+      "ecosystem": "rust",
+      "notice_sha256": "5adcb518aed38dbd47f61ef0a77aba79792d12dee7e8b8d78f241ec9c19c84a1"
+    },
+    {
+      "name": "clap_builder",
+      "version": "4.6.0",
+      "license": "MIT OR Apache-2.0",
+      "ecosystem": "rust",
+      "notice_sha256": "5adcb518aed38dbd47f61ef0a77aba79792d12dee7e8b8d78f241ec9c19c84a1"
+    },
+    {
+      "name": "clap_derive",
+      "version": "4.6.1",
+      "license": "MIT OR Apache-2.0",
+      "ecosystem": "rust",
+      "notice_sha256": "5adcb518aed38dbd47f61ef0a77aba79792d12dee7e8b8d78f241ec9c19c84a1"
+    },
+    {
+      "name": "clap_lex",
+      "version": "1.1.0",
+      "license": "MIT OR Apache-2.0",
+      "ecosystem": "rust",
+      "notice_sha256": "5adcb518aed38dbd47f61ef0a77aba79792d12dee7e8b8d78f241ec9c19c84a1"
+    },
+    {
+      "name": "colorchoice",
+      "version": "1.0.5",
+      "license": "MIT OR Apache-2.0",
+      "ecosystem": "rust",
+      "notice_sha256": "5adcb518aed38dbd47f61ef0a77aba79792d12dee7e8b8d78f241ec9c19c84a1"
+    },
+    {
+      "name": "const-oid",
+      "version": "0.10.2",
+      "license": "Apache-2.0 OR MIT",
+      "ecosystem": "rust",
+      "notice_sha256": "21dec1f1a9aa5abc8389f4f7f8cf5c6590abcc993485b6e7d1843192e4008b2d"
+    },
+    {
+      "name": "cpufeatures",
+      "version": "0.3.0",
+      "license": "MIT OR Apache-2.0",
+      "ecosystem": "rust",
+      "notice_sha256": "da2bc7c54faf8dbca2ebc1c2d758dfe4a80d41e171473f630b798f7a9d79c935"
+    },
+    {
+      "name": "crypto-common",
+      "version": "0.2.2",
+      "license": "MIT OR Apache-2.0",
+      "ecosystem": "rust",
+      "notice_sha256": "79ea326534033e64a8236b6195f2d24f16c9bd6cf5943d1af95bbada26302a6f"
+    },
+    {
+      "name": "digest",
+      "version": "0.11.3",
+      "license": "MIT OR Apache-2.0",
+      "ecosystem": "rust",
+      "notice_sha256": "caacac1156bb3f2ccf1f7eb2bc2f58a127da4973f585688fb2a0f42e3c61c6d0"
+    },
+    {
+      "name": "displaydoc",
+      "version": "0.2.6",
+      "license": "MIT OR Apache-2.0",
+      "ecosystem": "rust",
+      "notice_sha256": "312dcab7dc22fd18357aa055967115f0a93d6b6ab8c3db975b8da24761d3554b"
+    },
+    {
+      "name": "fastrand",
+      "version": "2.4.1",
+      "license": "Apache-2.0 OR MIT",
+      "ecosystem": "rust",
+      "notice_sha256": "312dcab7dc22fd18357aa055967115f0a93d6b6ab8c3db975b8da24761d3554b"
+    },
+    {
+      "name": "filetime",
+      "version": "0.2.29",
+      "license": "MIT/Apache-2.0",
+      "ecosystem": "rust",
+      "notice_sha256": "faa488900802ab01f1491de4fa97143fffff640a6d179af559f4f21cc4d53cbb"
+    },
+    {
+      "name": "find-msvc-tools",
+      "version": "0.1.9",
+      "license": "MIT OR Apache-2.0",
+      "ecosystem": "rust",
+      "notice_sha256": "faa488900802ab01f1491de4fa97143fffff640a6d179af559f4f21cc4d53cbb"
+    },
+    {
+      "name": "flatbuffers",
+      "version": "25.12.19",
+      "license": "Apache-2.0",
+      "ecosystem": "rust",
+      "notice_sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+    },
+    {
+      "name": "form_urlencoded",
+      "version": "1.2.2",
+      "license": "MIT OR Apache-2.0",
+      "ecosystem": "rust",
+      "notice_sha256": "09daae9a1e943dfe4fbb11f8c4d7e4b95cdc386768aa3f2b81e3bc4a4837eae4"
+    },
+    {
+      "name": "getrandom",
+      "version": "0.2.17",
+      "license": "MIT OR Apache-2.0",
+      "ecosystem": "rust",
+      "notice_sha256": "c86cd0efae29695d98178ae25345b304043275df0ea6383389b3f62d0ae33769"
+    },
+    {
+      "name": "getrandom",
+      "version": "0.4.2",
+      "license": "MIT OR Apache-2.0",
+      "ecosystem": "rust",
+      "notice_sha256": "215350f4caff61187005f3bfed2af37750a73ed1ba30371f3f88ace8259842a3"
+    },
+    {
+      "name": "heck",
+      "version": "0.5.0",
+      "license": "MIT OR Apache-2.0",
+      "ecosystem": "rust",
+      "notice_sha256": "ea050f4ba3a0c467fb57737dab6af2a4209c220315fcbb00caae1f76507521cd"
+    },
+    {
+      "name": "hybrid-array",
+      "version": "0.4.12",
+      "license": "MIT OR Apache-2.0",
+      "ecosystem": "rust",
+      "notice_sha256": "6ed41a59984f5d432a83f35249b3257b7c3695a3ed9ab216acc25cc64149ab91"
+    },
+    {
+      "name": "icu_collections",
+      "version": "2.2.0",
+      "license": "Unicode-3.0",
+      "ecosystem": "rust",
+      "notice_sha256": "f367c1b8e1aa262435251e442901da4607b4650e0e63a026f5044473ecfb90f2"
+    },
+    {
+      "name": "icu_locale_core",
+      "version": "2.2.0",
+      "license": "Unicode-3.0",
+      "ecosystem": "rust",
+      "notice_sha256": "f367c1b8e1aa262435251e442901da4607b4650e0e63a026f5044473ecfb90f2"
+    },
+    {
+      "name": "icu_normalizer",
+      "version": "2.2.0",
+      "license": "Unicode-3.0",
+      "ecosystem": "rust",
+      "notice_sha256": "f367c1b8e1aa262435251e442901da4607b4650e0e63a026f5044473ecfb90f2"
+    },
+    {
+      "name": "icu_normalizer_data",
+      "version": "2.2.0",
+      "license": "Unicode-3.0",
+      "ecosystem": "rust",
+      "notice_sha256": "f367c1b8e1aa262435251e442901da4607b4650e0e63a026f5044473ecfb90f2"
+    },
+    {
+      "name": "icu_properties",
+      "version": "2.2.0",
+      "license": "Unicode-3.0",
+      "ecosystem": "rust",
+      "notice_sha256": "f367c1b8e1aa262435251e442901da4607b4650e0e63a026f5044473ecfb90f2"
+    },
+    {
+      "name": "icu_properties_data",
+      "version": "2.2.0",
+      "license": "Unicode-3.0",
+      "ecosystem": "rust",
+      "notice_sha256": "f367c1b8e1aa262435251e442901da4607b4650e0e63a026f5044473ecfb90f2"
+    },
+    {
+      "name": "icu_provider",
+      "version": "2.2.0",
+      "license": "Unicode-3.0",
+      "ecosystem": "rust",
+      "notice_sha256": "f367c1b8e1aa262435251e442901da4607b4650e0e63a026f5044473ecfb90f2"
+    },
+    {
+      "name": "idna",
+      "version": "1.1.0",
+      "license": "MIT OR Apache-2.0",
+      "ecosystem": "rust",
+      "notice_sha256": "a339b50c78d183206896f41c8c1737922265998214012f543e447704d9d4c607"
+    },
+    {
+      "name": "idna_adapter",
+      "version": "1.2.2",
+      "license": "Apache-2.0 OR MIT",
+      "ecosystem": "rust",
+      "notice_sha256": "4116a6997ef4fea1622aded5b4d78dccb93efe728e1b89169493ef9d4d75a9ff"
+    },
+    {
+      "name": "is_terminal_polyfill",
+      "version": "1.70.2",
+      "license": "MIT OR Apache-2.0",
+      "ecosystem": "rust",
+      "notice_sha256": "5adcb518aed38dbd47f61ef0a77aba79792d12dee7e8b8d78f241ec9c19c84a1"
+    },
+    {
+      "name": "itoa",
+      "version": "1.0.18",
+      "license": "MIT OR Apache-2.0",
+      "ecosystem": "rust",
+      "notice_sha256": "6d14e5bfb3154bf33e54d805b9ce36debfb0d91644e6cbc0c197265c284bb285"
+    },
+    {
+      "name": "libc",
+      "version": "0.2.186",
+      "license": "MIT OR Apache-2.0",
+      "ecosystem": "rust",
+      "notice_sha256": "b0f253a2e70e63997cfc26bc0aca3427f4d54614df596a2c0b14bdbe099bb7bc"
+    },
+    {
+      "name": "litemap",
+      "version": "0.8.2",
+      "license": "Unicode-3.0",
+      "ecosystem": "rust",
+      "notice_sha256": "f367c1b8e1aa262435251e442901da4607b4650e0e63a026f5044473ecfb90f2"
+    },
+    {
+      "name": "lock_api",
+      "version": "0.4.14",
+      "license": "MIT OR Apache-2.0",
+      "ecosystem": "rust",
+      "notice_sha256": "70eb5efdefc0b5712e338237f5953d0169b88a7e4607c84ed205ad7ab62ff2eb"
+    },
+    {
+      "name": "memchr",
+      "version": "2.8.2",
+      "license": "Unlicense OR MIT",
+      "ecosystem": "rust",
+      "notice_sha256": "68b957b6503a60a25ed5be91519c80688b8cba0cc94a8a18c184873da94d3839"
+    },
+    {
+      "name": "memoffset",
+      "version": "0.9.1",
+      "license": "MIT",
+      "ecosystem": "rust",
+      "notice_sha256": "3234ac55816264ee7b6c7ee27efd61cf0a1fe775806870e3d9b4c41ea73c5cb1"
+    },
+    {
+      "name": "mio",
+      "version": "1.2.1",
+      "license": "MIT",
+      "ecosystem": "rust",
+      "notice_sha256": "07919255c7e04793d8ea760d6c2ce32d19f9ff02bdbdde3ce90b1e1880929a9b"
+    },
+    {
+      "name": "nix",
+      "version": "0.29.0",
+      "license": "MIT",
+      "ecosystem": "rust",
+      "notice_sha256": "66e3ee1fa7f909ad3c612d556f2a0cdabcd809ad6e66f3b0605015ac64841b70"
+    },
+    {
+      "name": "num-traits",
+      "version": "0.2.19",
+      "license": "MIT OR Apache-2.0",
+      "ecosystem": "rust",
+      "notice_sha256": "8f1b7d19623b42e90cb47e346a80f94254731eb0c615235621668a5ced723c6c"
+    },
+    {
+      "name": "once_cell",
+      "version": "1.21.4",
+      "license": "MIT OR Apache-2.0",
+      "ecosystem": "rust",
+      "notice_sha256": "312dcab7dc22fd18357aa055967115f0a93d6b6ab8c3db975b8da24761d3554b"
+    },
+    {
+      "name": "once_cell_polyfill",
+      "version": "1.70.2",
+      "license": "MIT OR Apache-2.0",
+      "ecosystem": "rust",
+      "notice_sha256": "5adcb518aed38dbd47f61ef0a77aba79792d12dee7e8b8d78f241ec9c19c84a1"
+    },
+    {
+      "name": "parking_lot",
+      "version": "0.12.5",
+      "license": "MIT OR Apache-2.0",
+      "ecosystem": "rust",
+      "notice_sha256": "70eb5efdefc0b5712e338237f5953d0169b88a7e4607c84ed205ad7ab62ff2eb"
+    },
+    {
+      "name": "parking_lot_core",
+      "version": "0.9.12",
+      "license": "MIT OR Apache-2.0",
+      "ecosystem": "rust",
+      "notice_sha256": "70eb5efdefc0b5712e338237f5953d0169b88a7e4607c84ed205ad7ab62ff2eb"
+    },
+    {
+      "name": "percent-encoding",
+      "version": "2.3.2",
+      "license": "MIT OR Apache-2.0",
+      "ecosystem": "rust",
+      "notice_sha256": "a339b50c78d183206896f41c8c1737922265998214012f543e447704d9d4c607"
+    },
+    {
+      "name": "pin-project-lite",
+      "version": "0.2.17",
+      "license": "Apache-2.0 OR MIT",
+      "ecosystem": "rust",
+      "notice_sha256": "b346d622c7ce9ecb6da821f554af208f28f45693a15b73bbbe0a4c1e43cee22a"
+    },
+    {
+      "name": "potential_utf",
+      "version": "0.1.5",
+      "license": "Unicode-3.0",
+      "ecosystem": "rust",
+      "notice_sha256": "f367c1b8e1aa262435251e442901da4607b4650e0e63a026f5044473ecfb90f2"
+    },
+    {
+      "name": "proc-macro2",
+      "version": "1.0.106",
+      "license": "MIT OR Apache-2.0",
+      "ecosystem": "rust",
+      "notice_sha256": "6d14e5bfb3154bf33e54d805b9ce36debfb0d91644e6cbc0c197265c284bb285"
+    },
+    {
+      "name": "quick-xml",
+      "version": "0.41.0",
+      "license": "MIT",
+      "ecosystem": "rust",
+      "notice_sha256": "f0cf9b1c62bbe3bd3a69f5f79c7158f513f612b4940a0a812d1db39d605318bc"
+    },
+    {
+      "name": "quote",
+      "version": "1.0.45",
+      "license": "MIT OR Apache-2.0",
+      "ecosystem": "rust",
+      "notice_sha256": "6d14e5bfb3154bf33e54d805b9ce36debfb0d91644e6cbc0c197265c284bb285"
+    },
+    {
+      "name": "rustc_version",
+      "version": "0.4.1",
+      "license": "MIT OR Apache-2.0",
+      "ecosystem": "rust",
+      "notice_sha256": "70eb5efdefc0b5712e338237f5953d0169b88a7e4607c84ed205ad7ab62ff2eb"
+    },
+    {
+      "name": "same-file",
+      "version": "1.0.6",
+      "license": "Unlicense/MIT",
+      "ecosystem": "rust",
+      "notice_sha256": "e90a822bc8c79993078e956f687200f741b288b42fbaad68865aec710f87e078"
+    },
+    {
+      "name": "scopeguard",
+      "version": "1.2.0",
+      "license": "MIT OR Apache-2.0",
+      "ecosystem": "rust",
+      "notice_sha256": "b82642e0f97e04c0b9ffd480b39ae306bf0713e8ab10209fd441ab789c4d2405"
+    },
+    {
+      "name": "semver",
+      "version": "1.0.28",
+      "license": "MIT OR Apache-2.0",
+      "ecosystem": "rust",
+      "notice_sha256": "6d14e5bfb3154bf33e54d805b9ce36debfb0d91644e6cbc0c197265c284bb285"
+    },
+    {
+      "name": "serde",
+      "version": "1.0.228",
+      "license": "MIT OR Apache-2.0",
+      "ecosystem": "rust",
+      "notice_sha256": "6d14e5bfb3154bf33e54d805b9ce36debfb0d91644e6cbc0c197265c284bb285"
+    },
+    {
+      "name": "serde_core",
+      "version": "1.0.228",
+      "license": "MIT OR Apache-2.0",
+      "ecosystem": "rust",
+      "notice_sha256": "6d14e5bfb3154bf33e54d805b9ce36debfb0d91644e6cbc0c197265c284bb285"
+    },
+    {
+      "name": "serde_derive",
+      "version": "1.0.228",
+      "license": "MIT OR Apache-2.0",
+      "ecosystem": "rust",
+      "notice_sha256": "6d14e5bfb3154bf33e54d805b9ce36debfb0d91644e6cbc0c197265c284bb285"
+    },
+    {
+      "name": "serde_ignored",
+      "version": "0.1.14",
+      "license": "MIT OR Apache-2.0",
+      "ecosystem": "rust",
+      "notice_sha256": "6d14e5bfb3154bf33e54d805b9ce36debfb0d91644e6cbc0c197265c284bb285"
+    },
+    {
+      "name": "serde_json",
+      "version": "1.0.150",
+      "license": "MIT OR Apache-2.0",
+      "ecosystem": "rust",
+      "notice_sha256": "6d14e5bfb3154bf33e54d805b9ce36debfb0d91644e6cbc0c197265c284bb285"
+    },
+    {
+      "name": "serde_path_to_error",
+      "version": "0.1.20",
+      "license": "MIT OR Apache-2.0",
+      "ecosystem": "rust",
+      "notice_sha256": "6d14e5bfb3154bf33e54d805b9ce36debfb0d91644e6cbc0c197265c284bb285"
+    },
+    {
+      "name": "sha2",
+      "version": "0.11.0",
+      "license": "MIT OR Apache-2.0",
+      "ecosystem": "rust",
+      "notice_sha256": "5ece6d0e1c21f7b1252ff4ddc5a6317431513e8e4759e5e700fa8d3b2e46b931"
+    },
+    {
+      "name": "shlex",
+      "version": "2.0.1",
+      "license": "MIT OR Apache-2.0",
+      "ecosystem": "rust",
+      "notice_sha256": "c6a6a7e2fe3c07d4ccbeb5b5ebcc0b3fc6ffcbd1282f0dc58b92d24126c08449"
+    },
+    {
+      "name": "smallvec",
+      "version": "1.15.2",
+      "license": "MIT OR Apache-2.0",
+      "ecosystem": "rust",
+      "notice_sha256": "6b111fd71d6b6f379aecbf971ee143a4937c81830ced2313605728f5bcf227ce"
+    },
+    {
+      "name": "socket2",
+      "version": "0.6.4",
+      "license": "MIT OR Apache-2.0",
+      "ecosystem": "rust",
+      "notice_sha256": "faa488900802ab01f1491de4fa97143fffff640a6d179af559f4f21cc4d53cbb"
+    },
+    {
+      "name": "stable_deref_trait",
+      "version": "1.2.1",
+      "license": "MIT OR Apache-2.0",
+      "ecosystem": "rust",
+      "notice_sha256": "d8acb4ec5e76e9760f363dc239e642dfce6d5ade96727abc016c4a1d86625b1e"
+    },
+    {
+      "name": "strsim",
+      "version": "0.11.1",
+      "license": "MIT",
+      "ecosystem": "rust",
+      "notice_sha256": "1e697ce8d21401fbf1bddd9b5c3fd4c4c79ae1e3bdf51f81761c85e11d5a89cd"
+    },
+    {
+      "name": "syn",
+      "version": "2.0.118",
+      "license": "MIT OR Apache-2.0",
+      "ecosystem": "rust",
+      "notice_sha256": "6d14e5bfb3154bf33e54d805b9ce36debfb0d91644e6cbc0c197265c284bb285"
+    },
+    {
+      "name": "synstructure",
+      "version": "0.13.2",
+      "license": "MIT",
+      "ecosystem": "rust",
+      "notice_sha256": "219920e865eee70b7dcfc948a86b099e7f4fe2de01bcca2ca9a20c0a033f2b59"
+    },
+    {
+      "name": "tempfile",
+      "version": "3.27.0",
+      "license": "MIT OR Apache-2.0",
+      "ecosystem": "rust",
+      "notice_sha256": "56e5714226978591caf3bf3a67fa0bee60a12067373bbc0370d256dd95da1111"
+    },
+    {
+      "name": "thiserror",
+      "version": "2.0.18",
+      "license": "MIT OR Apache-2.0",
+      "ecosystem": "rust",
+      "notice_sha256": "6d14e5bfb3154bf33e54d805b9ce36debfb0d91644e6cbc0c197265c284bb285"
+    },
+    {
+      "name": "thiserror-impl",
+      "version": "2.0.18",
+      "license": "MIT OR Apache-2.0",
+      "ecosystem": "rust",
+      "notice_sha256": "6d14e5bfb3154bf33e54d805b9ce36debfb0d91644e6cbc0c197265c284bb285"
+    },
+    {
+      "name": "tinystr",
+      "version": "0.8.3",
+      "license": "Unicode-3.0",
+      "ecosystem": "rust",
+      "notice_sha256": "f367c1b8e1aa262435251e442901da4607b4650e0e63a026f5044473ecfb90f2"
+    },
+    {
+      "name": "tokio",
+      "version": "1.52.3",
+      "license": "MIT",
+      "ecosystem": "rust",
+      "notice_sha256": "253cd04c6714889df2d32f3f64d669179a1c95c76ac43c40882c52eb06bc3552"
+    },
+    {
+      "name": "tokio-macros",
+      "version": "2.7.0",
+      "license": "MIT",
+      "ecosystem": "rust",
+      "notice_sha256": "0b83dc40cba89b9922bb84b0a9c7d2768ce37c1d7e138b7424fd4549915778c9"
+    },
+    {
+      "name": "tracelogging",
+      "version": "1.2.4",
+      "license": "MIT",
+      "ecosystem": "rust",
+      "notice_sha256": "d9a1b1e30d633d5732ea18e3cba9538d293ebc53e1a9e4e96ab739e0c5c4f1cb"
+    },
+    {
+      "name": "tracelogging_macros",
+      "version": "1.2.3",
+      "license": "MIT",
+      "ecosystem": "rust",
+      "notice_sha256": "d9a1b1e30d633d5732ea18e3cba9538d293ebc53e1a9e4e96ab739e0c5c4f1cb"
+    },
+    {
+      "name": "typenum",
+      "version": "1.20.1",
+      "license": "MIT OR Apache-2.0",
+      "ecosystem": "rust",
+      "notice_sha256": "23dd654e747569d0ef7a332db926564be43fa5d05273e097cafdcd016a1dee20"
+    },
+    {
+      "name": "unicode-general-category",
+      "version": "1.1.0",
+      "license": "Apache-2.0",
+      "ecosystem": "rust",
+      "notice_sha256": "b40930bbcf80744c86c46a12bc9da056641d722716c378f5659b9e555ef833e1"
+    },
+    {
+      "name": "unicode-ident",
+      "version": "1.0.24",
+      "license": "(MIT OR Apache-2.0) AND Unicode-3.0",
+      "ecosystem": "rust",
+      "notice_sha256": "9a0d4c5bb6567a6a9070ac9ef74425ff2315b5a6e82245b3bb11f1f00c29cba5"
+    },
+    {
+      "name": "url",
+      "version": "2.5.8",
+      "license": "MIT OR Apache-2.0",
+      "ecosystem": "rust",
+      "notice_sha256": "a339b50c78d183206896f41c8c1737922265998214012f543e447704d9d4c607"
+    },
+    {
+      "name": "utf8_iter",
+      "version": "1.0.4",
+      "license": "Apache-2.0 OR MIT",
+      "ecosystem": "rust",
+      "notice_sha256": "91e6ca4fec59ecb7e27055be203dbfb0ecb63404716431428102eea74a4d64ba"
+    },
+    {
+      "name": "utf8parse",
+      "version": "0.2.2",
+      "license": "Apache-2.0 OR MIT",
+      "ecosystem": "rust",
+      "notice_sha256": "c967da22c7a0181c21e79bc34fa70892f0cfa8416f2da13f869c8d8357845efc"
+    },
+    {
+      "name": "uuid",
+      "version": "1.23.3",
+      "license": "Apache-2.0 OR MIT",
+      "ecosystem": "rust",
+      "notice_sha256": "e924b44a952a345dff67124a5d1d0218a44f17653502a4ab22ff1fe26547b2b8"
+    },
+    {
+      "name": "version_check",
+      "version": "0.9.5",
+      "license": "MIT/Apache-2.0",
+      "ecosystem": "rust",
+      "notice_sha256": "ff6fd8a5d0db3cda7abae4b3641b68b3780128f4760110fc92e663d546f1f300"
+    },
+    {
+      "name": "widestring",
+      "version": "1.2.1",
+      "license": "MIT OR Apache-2.0",
+      "ecosystem": "rust",
+      "notice_sha256": "d41af2d7189c7046ca51c8959c99013cec25d454c04734c0b8656e7ffb3c0cc2"
+    },
+    {
+      "name": "winapi-util",
+      "version": "0.1.11",
+      "license": "Unlicense OR MIT",
+      "ecosystem": "rust",
+      "notice_sha256": "e90a822bc8c79993078e956f687200f741b288b42fbaad68865aec710f87e078"
+    },
+    {
+      "name": "windows",
+      "version": "0.62.2",
+      "license": "MIT OR Apache-2.0",
+      "ecosystem": "rust",
+      "notice_sha256": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+    },
+    {
+      "name": "windows-collections",
+      "version": "0.3.2",
+      "license": "MIT OR Apache-2.0",
+      "ecosystem": "rust",
+      "notice_sha256": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+    },
+    {
+      "name": "windows-core",
+      "version": "0.62.2",
+      "license": "MIT OR Apache-2.0",
+      "ecosystem": "rust",
+      "notice_sha256": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+    },
+    {
+      "name": "windows-future",
+      "version": "0.3.2",
+      "license": "MIT OR Apache-2.0",
+      "ecosystem": "rust",
+      "notice_sha256": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+    },
+    {
+      "name": "windows-implement",
+      "version": "0.60.2",
+      "license": "MIT OR Apache-2.0",
+      "ecosystem": "rust",
+      "notice_sha256": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+    },
+    {
+      "name": "windows-interface",
+      "version": "0.59.3",
+      "license": "MIT OR Apache-2.0",
+      "ecosystem": "rust",
+      "notice_sha256": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+    },
+    {
+      "name": "windows-link",
+      "version": "0.2.1",
+      "license": "MIT OR Apache-2.0",
+      "ecosystem": "rust",
+      "notice_sha256": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+    },
+    {
+      "name": "windows-numerics",
+      "version": "0.3.1",
+      "license": "MIT OR Apache-2.0",
+      "ecosystem": "rust",
+      "notice_sha256": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+    },
+    {
+      "name": "windows-result",
+      "version": "0.4.1",
+      "license": "MIT OR Apache-2.0",
+      "ecosystem": "rust",
+      "notice_sha256": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+    },
+    {
+      "name": "windows-strings",
+      "version": "0.5.1",
+      "license": "MIT OR Apache-2.0",
+      "ecosystem": "rust",
+      "notice_sha256": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+    },
+    {
+      "name": "windows-sys",
+      "version": "0.59.0",
+      "license": "MIT OR Apache-2.0",
+      "ecosystem": "rust",
+      "notice_sha256": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+    },
+    {
+      "name": "windows-sys",
+      "version": "0.61.2",
+      "license": "MIT OR Apache-2.0",
+      "ecosystem": "rust",
+      "notice_sha256": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+    },
+    {
+      "name": "windows-targets",
+      "version": "0.52.6",
+      "license": "MIT OR Apache-2.0",
+      "ecosystem": "rust",
+      "notice_sha256": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+    },
+    {
+      "name": "windows-threading",
+      "version": "0.2.1",
+      "license": "MIT OR Apache-2.0",
+      "ecosystem": "rust",
+      "notice_sha256": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+    },
+    {
+      "name": "windows_x86_64_msvc",
+      "version": "0.52.6",
+      "license": "MIT OR Apache-2.0",
+      "ecosystem": "rust",
+      "notice_sha256": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+    },
+    {
+      "name": "winreg",
+      "version": "0.55.0",
+      "license": "MIT",
+      "ecosystem": "rust",
+      "notice_sha256": "ea021d8c6383c84d19c15ce90d3b1602cf448fdcc0bf3772c98e43c7bf1bf1d1"
+    },
+    {
+      "name": "winresource",
+      "version": "0.1.31",
+      "license": "MIT",
+      "ecosystem": "rust",
+      "notice_sha256": "3564da09711c475669c15346bb25a1530a7de683c13f4a51489c15a6d74438fa"
+    },
+    {
+      "name": "writeable",
+      "version": "0.6.3",
+      "license": "Unicode-3.0",
+      "ecosystem": "rust",
+      "notice_sha256": "f367c1b8e1aa262435251e442901da4607b4650e0e63a026f5044473ecfb90f2"
+    },
+    {
+      "name": "yoke",
+      "version": "0.8.3",
+      "license": "Unicode-3.0",
+      "ecosystem": "rust",
+      "notice_sha256": "f367c1b8e1aa262435251e442901da4607b4650e0e63a026f5044473ecfb90f2"
+    },
+    {
+      "name": "yoke-derive",
+      "version": "0.8.2",
+      "license": "Unicode-3.0",
+      "ecosystem": "rust",
+      "notice_sha256": "f367c1b8e1aa262435251e442901da4607b4650e0e63a026f5044473ecfb90f2"
+    },
+    {
+      "name": "zerofrom",
+      "version": "0.1.8",
+      "license": "Unicode-3.0",
+      "ecosystem": "rust",
+      "notice_sha256": "f367c1b8e1aa262435251e442901da4607b4650e0e63a026f5044473ecfb90f2"
+    },
+    {
+      "name": "zerofrom-derive",
+      "version": "0.1.7",
+      "license": "Unicode-3.0",
+      "ecosystem": "rust",
+      "notice_sha256": "f367c1b8e1aa262435251e442901da4607b4650e0e63a026f5044473ecfb90f2"
+    },
+    {
+      "name": "zerotrie",
+      "version": "0.2.4",
+      "license": "Unicode-3.0",
+      "ecosystem": "rust",
+      "notice_sha256": "f367c1b8e1aa262435251e442901da4607b4650e0e63a026f5044473ecfb90f2"
+    },
+    {
+      "name": "zerovec",
+      "version": "0.11.6",
+      "license": "Unicode-3.0",
+      "ecosystem": "rust",
+      "notice_sha256": "f367c1b8e1aa262435251e442901da4607b4650e0e63a026f5044473ecfb90f2"
+    },
+    {
+      "name": "zerovec-derive",
+      "version": "0.11.3",
+      "license": "Unicode-3.0",
+      "ecosystem": "rust",
+      "notice_sha256": "f367c1b8e1aa262435251e442901da4607b4650e0e63a026f5044473ecfb90f2"
+    },
+    {
+      "name": "zmij",
+      "version": "1.0.21",
+      "license": "MIT",
+      "ecosystem": "rust",
+      "notice_sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
+    }
+  ]
+}

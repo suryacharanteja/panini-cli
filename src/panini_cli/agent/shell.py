@@ -7,25 +7,31 @@ command, a timeout, or its completion ends every process it started.
 
 import asyncio
 import codecs
-import ctypes
 import os
-import re
 import shutil
 import signal
 import subprocess
 import time
 from dataclasses import dataclass
 
-_CREDENTIAL = re.compile(
-    r"(?i)(^|_)(api_?key|access_?key|key|secret|token|password|passwd|credential|credentials)($|_)"
-)
+from ..process import WindowsJob
+import contextlib
+
+_ENVIRONMENT_KEYS = frozenset({
+    "PATH", "PATHEXT", "SYSTEMROOT", "WINDIR", "COMSPEC", "OS", "PROCESSOR_ARCHITECTURE",
+    "NUMBER_OF_PROCESSORS", "TEMP", "TMP", "TMPDIR", "HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA",
+    "PROGRAMFILES", "PROGRAMFILES(X86)", "PROGRAMW6432", "LANG", "LC_ALL", "LC_CTYPE", "TERM",
+    "COLORTERM", "NO_COLOR", "PYTHONIOENCODING", "PYTHONUTF8", "PYTHONUNBUFFERED", "PAGER",
+    "GIT_PAGER", "GIT_TERMINAL_PROMPT", "TOKENIZERS_PARALLELISM",
+})
 _OUTPUT_KEEP = 256 * 1024
 _TAIL_WAIT = 2.0
 
 
 def safe_environment(environ=None):
-    """The command gets the user's environment without API keys, tokens or passwords."""
-    env = {key: value for key, value in (environ or os.environ).items() if not _CREDENTIAL.search(key)}
+    """Construct a tool environment; unknown names and credential-agent sockets never pass."""
+    source = os.environ if environ is None else environ
+    env = {key: value for key, value in source.items() if key.upper() in _ENVIRONMENT_KEYS}
     env.update(
         PYTHONIOENCODING="utf-8", PYTHONUTF8="1", PAGER="cat", GIT_PAGER="cat", GIT_TERMINAL_PROMPT="0"
     )
@@ -38,120 +44,32 @@ def shell_name():
     return "bash" if os.path.exists("/bin/bash") else "sh"
 
 
+def powershell_script(command):
+    return (
+        "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8;"
+        "$OutputEncoding=[System.Text.Encoding]::UTF8;$ProgressPreference='SilentlyContinue';"
+        "$global:LASTEXITCODE=$null\n"
+        f"{command}\n"
+        "$paniniOk=$?\n"
+        "if ($null -ne $LASTEXITCODE -and $LASTEXITCODE -ne 0) { exit $LASTEXITCODE }"
+        " elseif (-not $paniniOk) { exit 1 }"
+    )
+
+
 def shell_argv(command):
     if os.name == "nt":
         executable = shutil.which("pwsh") or shutil.which("powershell")
         if not executable:
             return ["cmd.exe", "/d", "/s", "/c", command]
         # UTF-8 output, no progress bars, and the real exit code of the last native command.
-        script = (
-            "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8;"
-            "$OutputEncoding=[System.Text.Encoding]::UTF8;$ProgressPreference='SilentlyContinue';"
-            "$global:LASTEXITCODE=$null\n"
-            f"{command}\n"
-            "$paniniOk=$?\n"
-            "if ($null -ne $LASTEXITCODE -and $LASTEXITCODE -ne 0) { exit $LASTEXITCODE }"
-            " elseif (-not $paniniOk) { exit 1 }"
-        )
+        script = powershell_script(command)
         return [executable, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script]
     return ["/bin/bash" if os.path.exists("/bin/bash") else "/bin/sh", "-c", command]
 
 
-class _WindowsJob:
-    def __init__(self, pid, *, max_processes=None, max_job_memory=None):
-        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
-        ntdll = ctypes.WinDLL("ntdll")
-        from ctypes import wintypes
-
-        kernel.CreateJobObjectW.restype = wintypes.HANDLE
-        kernel.CreateJobObjectW.argtypes = [ctypes.c_void_p, wintypes.LPCWSTR]
-        kernel.OpenProcess.restype = wintypes.HANDLE
-        kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
-        kernel.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
-        kernel.SetInformationJobObject.argtypes = [
-            wintypes.HANDLE,
-            ctypes.c_int,
-            ctypes.c_void_p,
-            wintypes.DWORD,
-        ]
-        kernel.TerminateJobObject.argtypes = [wintypes.HANDLE, wintypes.UINT]
-        kernel.TerminateProcess.argtypes = [wintypes.HANDLE, wintypes.UINT]
-        kernel.CloseHandle.argtypes = [wintypes.HANDLE]
-        ntdll.NtResumeProcess.argtypes = [wintypes.HANDLE]
-        self.kernel = kernel
-
-        class Limits(ctypes.Structure):
-            _fields_ = [
-                ("process_time", ctypes.c_int64),
-                ("job_time", ctypes.c_int64),
-                ("flags", wintypes.DWORD),
-                ("min_ws", ctypes.c_size_t),
-                ("max_ws", ctypes.c_size_t),
-                ("active", wintypes.DWORD),
-                ("affinity", ctypes.c_size_t),
-                ("priority", wintypes.DWORD),
-                ("scheduling", wintypes.DWORD),
-            ]
-
-        class Extended(ctypes.Structure):
-            _fields_ = [
-                ("basic", Limits),
-                ("io", ctypes.c_uint64 * 6),
-                ("process_memory", ctypes.c_size_t),
-                ("job_memory", ctypes.c_size_t),
-                ("peak_process", ctypes.c_size_t),
-                ("peak_job", ctypes.c_size_t),
-            ]
-
-        self.job = kernel.CreateJobObjectW(None, None)
-        if not self.job:
-            raise ctypes.WinError(ctypes.get_last_error())
-        process = None
-        try:
-            info = Extended()
-            info.basic.flags = 0x2000  # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
-            if max_processes is not None:
-                if max_processes < 1:
-                    raise ValueError("max_processes must be positive")
-                info.basic.flags |= 0x00000008  # JOB_OBJECT_LIMIT_ACTIVE_PROCESS
-                info.basic.active = max_processes
-            if max_job_memory is not None:
-                if max_job_memory < 1:
-                    raise ValueError("max_job_memory must be positive")
-                info.basic.flags |= 0x00000200  # JOB_OBJECT_LIMIT_JOB_MEMORY
-                info.job_memory = max_job_memory
-            if not kernel.SetInformationJobObject(self.job, 9, ctypes.byref(info), ctypes.sizeof(info)):
-                raise ctypes.WinError(ctypes.get_last_error())
-            # PROCESS_SET_QUOTA | PROCESS_TERMINATE | PROCESS_SUSPEND_RESUME
-            process = kernel.OpenProcess(0x0100 | 0x0001 | 0x0800, False, pid)
-            if not process:
-                raise ctypes.WinError(ctypes.get_last_error())
-            if not kernel.AssignProcessToJobObject(self.job, process):
-                raise ctypes.WinError(ctypes.get_last_error())
-            if ntdll.NtResumeProcess(process) != 0:
-                raise OSError("The command could not be resumed")
-        except BaseException:
-            if process:
-                kernel.TerminateProcess(process, 1)
-            self.close()
-            raise
-        finally:
-            if process:
-                kernel.CloseHandle(process)
-
-    def kill(self):
-        if self.job:
-            self.kernel.TerminateJobObject(self.job, 1)
-
-    def close(self):
-        if self.job:
-            self.kernel.CloseHandle(self.job)  # Kill-on-close ends anything still running.
-            self.job = None
-
-
 def kill_windows_tree(pid, job=None):
     """Stop PowerShell's native descendants before the Job closes its root."""
-    try:
+    with contextlib.suppress(OSError, subprocess.TimeoutExpired):
         subprocess.run(
             ["taskkill", "/PID", str(pid), "/T", "/F"],
             capture_output=True,
@@ -159,8 +77,6 @@ def kill_windows_tree(pid, job=None):
             timeout=5,
             creationflags=subprocess.CREATE_NO_WINDOW,
         )
-    except (OSError, subprocess.TimeoutExpired):
-        pass
     if job:
         job.kill()
 
@@ -173,10 +89,13 @@ class CommandResult:
     timed_out: bool
     omitted: int  # Characters dropped from the middle of a very long output.
     stderr: str = ""  # Only with separate_stderr (hooks).
+    policy: dict | None = None
+    recovery_id: str | None = None
 
 
 async def run_command(
-    command, cwd, timeout, on_output=None, environ=None, argv=None, *, stdin_text=None, separate_stderr=False
+    command, cwd, timeout, on_output=None, environ=None, argv=None, *, stdin_text=None, separate_stderr=False,
+    max_processes=None, max_job_memory=None, max_cpu_percent=None, max_output_bytes=None
 ):
     """Run one approved command; returns when its whole process tree has ended."""
     windows = os.name == "nt"
@@ -199,7 +118,7 @@ async def run_command(
     job = None
     if windows:
         try:
-            job = _WindowsJob(process.pid)
+            job = WindowsJob(process.pid, max_processes=max_processes, max_job_memory=max_job_memory, max_cpu_percent=max_cpu_percent)
         except BaseException:
             process.kill()
             await process.wait()
@@ -210,10 +129,8 @@ async def run_command(
             # A PowerShell-launched child can otherwise retain the output pipe.
             kill_windows_tree(process.pid, job)
         else:
-            try:
+            with contextlib.suppress(ProcessLookupError):
                 os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
 
     decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
     head, tail, total = [], "", 0
@@ -227,7 +144,11 @@ async def run_command(
             tail = (tail + text)[-(_OUTPUT_KEEP * 3 // 4) :]
 
     async def pump():
+        output_bytes = 0
         while chunk := await process.stdout.read(65536):
+            output_bytes += len(chunk)
+            if max_output_bytes is not None and output_bytes > max_output_bytes:
+                raise OSError("Command output exceeded the task's output limit; process tree was stopped.")
             text = decoder.decode(chunk)
             if text:
                 keep(text)
@@ -256,9 +177,16 @@ async def run_command(
     helpers = [asyncio.create_task(pump_errors())] if separate_stderr else []
     if stdin_text is not None:
         helpers.append(asyncio.create_task(feed()))
+    process_wait = asyncio.create_task(process.wait())
+
+    async def wait_for_process():
+        done, _ = await asyncio.wait((process_wait, reader), return_when=asyncio.FIRST_COMPLETED)
+        if reader in done:
+            reader.result()  # An output/pump failure must stop the process immediately.
+        await process_wait
     try:
         try:
-            await asyncio.wait_for(process.wait(), timeout)
+            await asyncio.wait_for(wait_for_process(), timeout)
         except TimeoutError:
             timed_out = True
             kill_tree()

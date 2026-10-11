@@ -1,0 +1,13 @@
+{
+    "$schema": "../../schemas/stable/mxc-config.schema.1.0.0.json",
+    "version": "1.0.0",
+    "containment": "seatbelt",
+    "process": {
+        "commandLine": "cat {{TESTDIR}}/alias/secret.txt && (echo x > {{TESTDIR}}/alias/w.txt && echo PATH_ALIAS_WRITE_SUCCEEDED)",
+        "timeout": 10000
+    },
+    "filesystem": {
+        "readonlyPaths": ["{{TESTDIR}}/alias"],
+        "readwritePaths": ["{{TESTDIR_TMP}}/alias"]
+    }
+}

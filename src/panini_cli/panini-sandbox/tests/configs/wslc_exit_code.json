@@ -1,0 +1,15 @@
+{
+  "$schema": "../../schemas/stable/mxc-config.schema.1.0.0.json",
+  "version": "1.0.0",
+  "containerId": "wslc-exit-code",
+  "containment": "wslc",
+  "process": {
+    "commandLine": "sh -c 'echo About to exit with code 42; exit 42'"
+  },
+  "network": {
+    "egress": { "default": "deny" }
+  },
+  "wslc": {
+    "image": "alpine:latest"
+  }
+}

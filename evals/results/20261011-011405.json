@@ -1,0 +1,53 @@
+[
+  {
+    "arm": "model:ollama/qwen2.5:3b-instruct",
+    "task": "count-lines",
+    "solved": false,
+    "seconds": 9.1,
+    "status": "completed",
+    "text": "It seems that NOTES.md does not exist or is not readable within the workspace. Please ensure the file is present and try again.",
+    "tokens": 13704,
+    "cost_usd": 0.0,
+    "router_cost_usd": 0,
+    "router_tokens": 0,
+    "local_classifier_tokens": 0,
+    "models": [],
+    "stderr": "",
+    "workspace": "D:\\AI\\DEV\\panini-cli\\build\\eval-workspaces\\panini-eval-count-lines-51sjvyez",
+    "label": "candidate-regular-python"
+  },
+  {
+    "arm": "model:ollama/qwen2.5:3b-instruct",
+    "task": "fix-add",
+    "solved": false,
+    "seconds": 13.1,
+    "status": "unverified",
+    "text": "The requested changes could not be completed. Review the failed file actions.",
+    "tokens": 18016,
+    "cost_usd": 0.0,
+    "router_cost_usd": 0,
+    "router_tokens": 0,
+    "local_classifier_tokens": 0,
+    "models": [],
+    "stderr": "",
+    "workspace": "D:\\AI\\DEV\\panini-cli\\build\\eval-workspaces\\panini-eval-fix-add-2rakued4",
+    "label": "candidate-regular-python"
+  },
+  {
+    "arm": "model:ollama/qwen2.5:3b-instruct",
+    "task": "verify-after-diagnostic",
+    "solved": false,
+    "seconds": 41.9,
+    "status": "unverified",
+    "text": "The requested changes could not be completed. Review the failed file actions.",
+    "tokens": 45105,
+    "cost_usd": 0.0,
+    "router_cost_usd": 0,
+    "router_tokens": 0,
+    "local_classifier_tokens": 0,
+    "models": [],
+    "stderr": "",
+    "workspace": "D:\\AI\\DEV\\panini-cli\\build\\eval-workspaces\\panini-eval-verify-after-diagnostic-09c2_j4i",
+    "label": "candidate-regular-python"
+  }
+]

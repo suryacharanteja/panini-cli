@@ -1,0 +1,12 @@
+{
+  "$schema": "../../../schemas/stable/mxc-config.schema.1.0.0.json",
+  "version": "1.0.0",
+  "containerId": "UI-Test-06",
+  "containment": "processcontainer",
+  "process": {
+    "commandLine": "cmd.exe /c \"echo cliptest | clip.exe && echo PASS: clipboard write OK || echo FAIL: clipboard write blocked\"",
+    "timeout": 15000
+  },
+  "processContainer": { "capabilities": [], "ui": { "isolation": "desktop", "desktopSystemControl": true, "systemSettings": "all", "ime": true } },
+  "ui": { "disable": false, "clipboard": "all", "injection": true }
+}

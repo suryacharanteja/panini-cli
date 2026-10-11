@@ -1,0 +1,10 @@
+{
+    "$schema": "../../schemas/stable/mxc-config.schema.1.0.0.json",
+    "version": "1.0.0",
+    "phase": "exec",
+    "sandboxId": "{{SANDBOX_ID}}",
+    "process": {
+        "commandLine": "sh -c 'echo wslc-warm-marker-content > /tmp/wslc_sa_marker; echo wrote'",
+        "timeout": 30000
+    }
+}

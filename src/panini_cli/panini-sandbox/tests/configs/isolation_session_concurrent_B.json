@@ -1,0 +1,19 @@
+{
+  "$schema": "../../schemas/stable/mxc-config.schema.1.0.0.json",
+  "version": "1.0.0",
+  "containerId": "isolation-session-concurrent-B",
+  "containment": "isolation_session",
+  "process": {
+    "commandLine": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\\mxc_concurrent_log\\B.ps1",
+    "timeout": 30000
+  },
+  "network": {
+    "egress": {
+      "default": "allow"
+    },
+    "ingress": {
+      "default": "allow",
+      "hostLoopback": "allow"
+    }
+  }
+}

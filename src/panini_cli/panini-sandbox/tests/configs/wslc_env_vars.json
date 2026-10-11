@@ -1,0 +1,16 @@
+{
+  "$schema": "../../schemas/stable/mxc-config.schema.1.0.0.json",
+  "version": "1.0.0",
+  "containerId": "wslc-env-vars",
+  "containment": "wslc",
+  "process": {
+    "commandLine": "echo MY_VAR=$MY_VAR && echo GREETING=$GREETING",
+    "env": ["MY_VAR=hello_from_host", "GREETING=world"]
+  },
+  "network": {
+    "egress": { "default": "deny" }
+  },
+  "wslc": {
+    "image": "alpine:latest"
+  }
+}

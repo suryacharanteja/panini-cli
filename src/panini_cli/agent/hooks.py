@@ -66,14 +66,18 @@ class Hooks:
         self.project_file = self.workspace / ".panini" / "hooks.json"
         self.entries = {event: [] for event in EVENTS}
         self.untrusted = False
+        self.broker = None
+        self.project_digest = None
         self.load()
 
     def load(self):
         self.entries = {event: [] for event in EVENTS}
         sources = [("user", self.user_file)]
         self.untrusted = False
+        self.project_digest = None
         if self.project_file.is_file():
-            if digest(self.project_file) in trusted_digests():
+            self.project_digest = digest(self.project_file)
+            if self.project_digest in trusted_digests():
                 sources.append(("project", self.project_file))
             else:
                 self.untrusted = True  # Present but changed or never trusted: ignored.
@@ -123,9 +127,26 @@ class Hooks:
         for entry in self.entries.get(event, []):
             if not self._matches(entry, tool):
                 continue
-            outcome = await run_command(
-                entry["command"], self.workspace, entry["timeout"], stdin_text=payload, separate_stderr=True
-            )
+            if entry["origin"] == "project":
+                if self.broker is None or self.broker.settings.sandbox == "none":
+                    return "Project hooks require a sandbox; host execution was refused.", "\n".join(notes)
+                # Re-check configuration trust for each invocation. Mutable project
+                # scripts always execute under the same task boundary.
+                try:
+                    current_digest = digest(self.project_file)
+                except OSError:
+                    current_digest = None
+                if current_digest != self.project_digest or current_digest not in trusted_digests():
+                    return "Project hook configuration changed; trust it again.", "\n".join(notes)
+                try:
+                    outcome = await self.broker.run(entry["command"], entry["timeout"],
+                                                    stdin_text=payload, separate_stderr=True)
+                except OSError as exc:
+                    return f"Project hook could not run safely: {exc}", "\n".join(notes)
+            else:
+                outcome = await run_command(
+                    entry["command"], self.workspace, entry["timeout"], stdin_text=payload, separate_stderr=True
+                )
             label = f"{event} hook `{entry['command'][:80]}`"
             if outcome.timed_out:
                 notes.append(f"{label} timed out.")

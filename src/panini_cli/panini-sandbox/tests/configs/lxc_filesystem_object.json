@@ -1,0 +1,20 @@
+{
+  "$schema": "../../schemas/stable/mxc-config.schema.1.0.0.json",
+  "version": "1.0.0",
+  "containerId": "CLI-LXC-Object-Validation",
+  "containment": "lxc",
+  "process": {
+    "commandLine": "if cat /mnt/objdata/secret.txt 2>/dev/null; then echo OBJECT_LEAK; else echo OBJECT_MASKED_OK; fi"
+  },
+  "lifecycle": {
+    "destroyOnExit": true
+  },
+  "lxc": {
+    "distribution": "alpine",
+    "release": "3.23"
+  },
+  "filesystem": {
+    "readwritePaths": ["/mnt/objdata"],
+    "deniedPaths": ["/mnt/objlink"]
+  }
+}

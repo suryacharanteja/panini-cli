@@ -1,0 +1,27 @@
+{
+  "$schema": "../../schemas/stable/mxc-config.schema.1.0.0.json",
+  "version": "1.0.0",
+  "containerId": "isolation-session-one-shot-stray-config-rejected",
+  "containment": "isolation_session",
+  "process": {
+    "commandLine": "echo ONE_SHOT_STRAY_CONFIG_MUST_NOT_RUN",
+    "cwd": "C:\\",
+    "env": [],
+    "timeout": 30000
+  },
+  "isolationSession": {
+    "unrecognizedSetting": {
+    "nested": "value",
+    "futureField": true
+    }
+  },
+  "network": {
+    "egress": {
+      "default": "allow"
+    },
+    "ingress": {
+      "default": "allow",
+      "hostLoopback": "allow"
+    }
+  }
+}

@@ -33,8 +33,8 @@ def test_credentials_are_removed_from_the_command_environment():
             "SSH_AUTH_SOCK": "sock",
         }
     )
-    assert {"PATH", "TOKENIZERS_PARALLELISM", "SSH_AUTH_SOCK"} <= set(env)
-    assert not {"OPENAI_API_KEY", "AWS_SECRET_ACCESS_KEY", "GITHUB_TOKEN", "DB_PASSWORD"} & set(env)
+    assert {"PATH", "TOKENIZERS_PARALLELISM"} <= set(env)
+    assert not {"OPENAI_API_KEY", "AWS_SECRET_ACCESS_KEY", "GITHUB_TOKEN", "DB_PASSWORD", "SSH_AUTH_SOCK"} & set(env)
 
 
 @pytest.mark.anyio

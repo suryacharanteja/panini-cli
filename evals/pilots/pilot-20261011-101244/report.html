@@ -1,0 +1,63 @@
+<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>PANINI Harbor pilot</title><style>body{font:16px system-ui;margin:3em;color:#182330}table{border-collapse:collapse}td,th{padding:.5em;border:1px solid #ccd}pre{white-space:pre-wrap}</style><h1>PANINI Harbor engineering pilot</h1><p>Custom small tasks. Not an official leaderboard score or a Windows MXC security assessment. All attempted trials, including failures, are shown.</p><pre>{
+  &quot;attempted&quot;: 18,
+  &quot;solved&quot;: 18,
+  &quot;failed&quot;: 0,
+  &quot;estimated_cost_usd&quot;: 0.1108596,
+  &quot;unpriced_trials&quot;: 0,
+  &quot;mean_agent_seconds&quot;: 21.57511072222222,
+  &quot;trials_missing_agent_time&quot;: 0,
+  &quot;estimated_cost_per_solved_task_usd&quot;: 0.006158866666666667,
+  &quot;mean_total_seconds&quot;: 32.18838888888889,
+  &quot;trials_with_failed_commands&quot;: 15,
+  &quot;cli_completed&quot;: 3,
+  &quot;tasks_recovered_after_command_failure&quot;: 0
+}</pre><table><tr><th>Task</th><th>Repeat</th><th>Result</th><th>CLI status</th><th>Estimated USD</th><th>Agent seconds</th><th>Failed commands</th><th>Task recovered</th><th>Exception</th></tr><tr><td>fix-add</td><td>1</td><td>PASS</td><td>unverified</td><td>0.0038624</td><td>21.373769</td><td>2</td><td>False</td><td></td></tr><tr><td>fizzbuzz</td><td>1</td><td>PASS</td><td>unverified</td><td>0.006621</td><td>23.129951</td><td>2</td><td>False</td><td></td></tr><tr><td>pagination-off-by-one</td><td>1</td><td>PASS</td><td>unverified</td><td>0.0077064</td><td>22.927941</td><td>2</td><td>False</td><td></td></tr><tr><td>parse-config</td><td>1</td><td>PASS</td><td>unverified</td><td>0.0069128</td><td>25.292535</td><td>2</td><td>False</td><td></td></tr><tr><td>rename-across-files</td><td>1</td><td>PASS</td><td>unverified</td><td>0.0088946</td><td>26.448243</td><td>2</td><td>False</td><td></td></tr><tr><td>verify-after-diagnostic</td><td>1</td><td>PASS</td><td>completed</td><td>0.0020454</td><td>9.613532</td><td>0</td><td>False</td><td></td></tr><tr><td>fix-add</td><td>2</td><td>PASS</td><td>unverified</td><td>0.003833</td><td>13.830711</td><td>2</td><td>False</td><td></td></tr><tr><td>fizzbuzz</td><td>2</td><td>PASS</td><td>unverified</td><td>0.0081448</td><td>24.326182</td><td>2</td><td>False</td><td></td></tr><tr><td>pagination-off-by-one</td><td>2</td><td>PASS</td><td>unverified</td><td>0.0072616</td><td>24.356552</td><td>2</td><td>False</td><td></td></tr><tr><td>parse-config</td><td>2</td><td>PASS</td><td>unverified</td><td>0.0069926</td><td>35.344417</td><td>2</td><td>False</td><td></td></tr><tr><td>rename-across-files</td><td>2</td><td>PASS</td><td>unverified</td><td>0.006563</td><td>22.374348</td><td>2</td><td>False</td><td></td></tr><tr><td>verify-after-diagnostic</td><td>2</td><td>PASS</td><td>completed</td><td>0.0032218000000000004</td><td>11.753901</td><td>0</td><td>False</td><td></td></tr><tr><td>fix-add</td><td>3</td><td>PASS</td><td>unverified</td><td>0.0047072</td><td>17.125556</td><td>2</td><td>False</td><td></td></tr><tr><td>fizzbuzz</td><td>3</td><td>PASS</td><td>unverified</td><td>0.009556</td><td>27.530303</td><td>2</td><td>False</td><td></td></tr><tr><td>pagination-off-by-one</td><td>3</td><td>PASS</td><td>unverified</td><td>0.0077870000000000005</td><td>23.146543</td><td>2</td><td>False</td><td></td></tr><tr><td>parse-config</td><td>3</td><td>PASS</td><td>unverified</td><td>0.0071064000000000006</td><td>27.636351</td><td>2</td><td>False</td><td></td></tr><tr><td>rename-across-files</td><td>3</td><td>PASS</td><td>unverified</td><td>0.006457</td><td>21.746849</td><td>2</td><td>False</td><td></td></tr><tr><td>verify-after-diagnostic</td><td>3</td><td>PASS</td><td>completed</td><td>0.0031866</td><td>10.394309</td><td>0</td><td>False</td><td></td></tr></table><h2>Reproduction manifest</h2><pre>{
+  &quot;agent_version&quot;: &quot;2.1.1b1&quot;,
+  &quot;harbor_version&quot;: &quot;0.24.0&quot;,
+  &quot;model&quot;: &quot;gpt-5.6-luna&quot;,
+  &quot;budget_usd&quot;: 5.0,
+  &quot;repeats&quot;: 3,
+  &quot;planned_trials&quot;: 18,
+  &quot;max_steps&quot;: 16,
+  &quot;max_output_tokens_per_call&quot;: 2048,
+  &quot;price_per_million_tokens&quot;: [
+    0.2,
+    1.2
+  ],
+  &quot;price_source&quot;: &quot;PANINI ledger; estimates, not provider invoices&quot;,
+  &quot;containment&quot;: &quot;Harbor Linux Docker environments&quot;,
+  &quot;windows_mxc_tested&quot;: false,
+  &quot;dataset&quot;: &quot;PANINI custom engineering tasks; not Terminal-Bench&quot;,
+  &quot;task_ids&quot;: [
+    &quot;fix-add&quot;,
+    &quot;fizzbuzz&quot;,
+    &quot;pagination-off-by-one&quot;,
+    &quot;parse-config&quot;,
+    &quot;rename-across-files&quot;,
+    &quot;verify-after-diagnostic&quot;
+  ],
+  &quot;created_at&quot;: &quot;2026-10-11T06:13:08.124048+00:00&quot;,
+  &quot;adapter_sha256&quot;: &quot;af71c3f7e7f6da1513036fd4fe50e0b470160a0dd94306d0976d1ec396ccb91f&quot;,
+  &quot;base_image&quot;: &quot;python@sha256:2f17fc044b579bab302c2e8054d3a686e2cb9a83de48e70534b94cd8ebbe06a9&quot;,
+  &quot;runtime_image_id&quot;: &quot;sha256:28d1c7a36dc52a597bcdfa44a7fa02f5e5ac1f8a9a66abf3202fa55ba81f2cd9&quot;,
+  &quot;requirements_sha256&quot;: &quot;98e1fcaf017d&quot;,
+  &quot;tasks_sha256&quot;: &quot;40384393fac824bd6cb520802af7e9f480c76729b87be6c1d1759f5c88b91c53&quot;,
+  &quot;reserved_cost_upper_bound_usd&quot;: 1.4041648000000004,
+  &quot;forwarded_api_calls&quot;: 168,
+  &quot;denied_api_calls&quot;: 0,
+  &quot;phase&quot;: &quot;preliminary&quot;,
+  &quot;fixture_revision&quot;: 1,
+  &quot;valid_primary_benchmark&quot;: false,
+  &quot;initial_wheel_sha256&quot;: &quot;7658eb1afb85019d6a419bc36f9cb0bc459b37fe8204c47d0e1fde42727daf0a&quot;,
+  &quot;evaluated_wheel_sha256s&quot;: [
+    &quot;3b71762758078de204404b6d67220a1f9d6c20ae8b7c4fc4396c1ae25428d513&quot;,
+    &quot;7658eb1afb85019d6a419bc36f9cb0bc459b37fe8204c47d0e1fde42727daf0a&quot;
+  ],
+  &quot;methodology_issues&quot;: [
+    &quot;Empty pytest.ini was added to five tasks with no tests, causing pytest exit 5 and unverified CLI outcomes.&quot;,
+    &quot;The wheel path was rebuilt during this run. Per-trial wheel hashes are recorded; the corrected run freezes one artifact.&quot;,
+    &quot;Recovery was initially counted from any command failure plus an oracle pass. The published recovery metric now requires a successful retry of the same command.&quot;
+  ],
+  &quot;report_recomputed_from_raw&quot;: true,
+  &quot;report_processor_sha256&quot;: &quot;f6339f5376362aad8d39a447da01e0671dcb0aad328a9ca5d179a44bf73d8f98&quot;
+}</pre></html>

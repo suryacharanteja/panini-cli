@@ -10,6 +10,7 @@ import os
 import shutil
 import subprocess
 from secrets import token_hex
+import contextlib
 
 DEFAULT_IMAGE = "python:3.12-slim"
 
@@ -109,10 +110,8 @@ def new_name():
 def remove(name):
     """A killed docker CLI can leave its container running; remove it by name."""
     if docker():
-        try:
+        with contextlib.suppress(OSError, subprocess.TimeoutExpired):
             _run(["rm", "-f", name], 30)
-        except (OSError, subprocess.TimeoutExpired):
-            pass
 
 
 def prepare_image(timeout=600):

@@ -25,7 +25,7 @@ def test_model_router_picks_cheapest_confident_sufficient_model():
     assert decision.changed
 
 
-def test_model_router_does_not_downgrade_on_low_confidence():
+def test_low_confidence_uses_workload_fallback_without_incumbent_bias():
     decision = model_router.decide(
         prompt="fix the bug",
         current_model="gpt-strong",
@@ -36,11 +36,11 @@ def test_model_router_does_not_downgrade_on_low_confidence():
         },
         options=options(),
     )
-    assert decision.model == "gpt-strong"
-    assert decision.reason == "low-confidence-no-downgrade/no-change"
+    assert decision.model == "gpt-cheap"
+    assert "below capability thresholds" in decision.reason
 
 
-def test_model_router_does_not_use_cheapest_model_for_local_machine_tasks():
+def test_machine_topic_does_not_impose_model_floor():
     decision = model_router.decide(
         prompt="check downloads folder",
         current_model="gpt-cheap",
@@ -51,8 +51,8 @@ def test_model_router_does_not_use_cheapest_model_for_local_machine_tasks():
         },
         options=options(),
     )
-    assert decision.model == "gpt-balanced"
-    assert decision.reason == "local-machine-floor"
+    assert decision.model == "gpt-cheap"
+    assert decision.reason == "jev/no-change"
 
 
 def test_model_router_respects_explicit_human_override():
@@ -99,30 +99,30 @@ def test_jev_can_pick_the_local_model_for_a_simple_task():
     assert decision.model == LOCAL
 
 
-def test_offline_estimate_vetoes_the_local_model_for_a_hard_task():
+def test_jev_capability_assessment_is_not_overridden_by_keyword_veto():
     decision = model_router.decide(
         prompt="refactor the auth module across all files and migrate the database",
         current_model="gpt-balanced",
         answers={"model_0": {"probability": 0.95}, "model_1": {"probability": 0.4}, "model_2": {"probability": 0.4}},
         options=local_options(),
     )
-    assert decision.model != LOCAL
-    assert decision.reason.startswith("complexity-veto")
+    assert decision.model == LOCAL
+    assert decision.reason == "jev"
 
 
-def test_local_machine_tasks_never_go_local():
+def test_local_machine_tasks_can_go_local():
     decision = model_router.decide_offline(
         prompt="how much RAM do I have", current_model="gpt-balanced", options=local_options()
     )
-    assert decision.model == "gpt-balanced"
+    assert decision.model == LOCAL
 
 
-def test_a_cloud_session_with_history_does_not_drop_to_the_local_model():
+def test_independent_question_can_return_to_local_after_cloud_history():
     decision = model_router.decide_offline(
         prompt="what is a mutex?", current_model="gpt-strong", options=local_options(), context_tokens=5_000
     )
-    assert decision.model == "gpt-strong"
-    assert decision.reason.startswith("no-local-after-cloud-context")
+    assert decision.model == LOCAL
+    assert decision.context_policy == "independent"
 
 
 def test_offline_routing_picks_the_cheapest_sufficient_model():
@@ -139,7 +139,7 @@ def test_route_falls_back_offline_when_jev_is_not_configured(monkeypatch):
     monkeypatch.setattr(model_router, "routing_options", lambda allow_local=True: local_options())
     decision = model_router.route("git status", "gpt-balanced")
     assert decision.model == LOCAL
-    assert "jev off" in decision.reason
+    assert "jev unavailable" in decision.reason
 
 
 def test_route_uses_only_the_local_model_without_a_cloud_key(monkeypatch):
@@ -160,3 +160,102 @@ def test_local_can_be_switched_off(monkeypatch):
 
 def test_you_can_ask_for_the_local_model_by_name():
     assert model_router.detect_override("use qwen for this", local_options()) == LOCAL
+
+
+def test_cheapest_capable_wins_even_when_stronger_scores_higher():
+    decision = model_router.decide(prompt="explain the README", current_model="gpt-strong", options=local_options(),
+        answers={"model_0": {"probability": .8}, "model_1": {"probability": .9}, "model_3": {"probability": .99}})
+    assert decision.model == LOCAL
+
+
+def test_greeting_never_calls_paid_router(monkeypatch):
+    from panini_cli.jev import client
+    monkeypatch.setattr(model_router, "routing_options", lambda **kwargs: local_options())
+    monkeypatch.setattr(client, "ask", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("paid routing")))
+    decision = model_router.route("hi", "gpt-strong", 50000)
+    assert decision.model == LOCAL
+    assert decision.context_policy == "independent"
+    assert decision.cost_usd == 0
+
+
+def test_followup_keeps_cloud_history():
+    decision = model_router.decide_offline(prompt="explain that again", current_model="gpt-strong",
+                                          options=local_options(), context_tokens=50000)
+    assert decision.model == "gpt-strong"
+    assert decision.context_policy == "full"
+
+
+def test_jev_assesses_capability_instead_of_subject_floor():
+    decision = model_router.decide(prompt="refactor auth and migrate database", current_model="gpt-balanced",
+        options=local_options(), answers={"model_1": {"probability": .99}, "model_3": {"probability": .85}})
+    assert decision.model == "gpt-cheap"
+
+
+def test_malformed_score_is_not_confidence():
+    assert model_router._answer_probability({"probability": float("nan")}) == 0
+    assert model_router._answer_probability({"probability": True}) == 0
+
+
+def test_cache_saves_router_cost_and_respects_local_availability(monkeypatch):
+    from panini_cli.jev import client
+    model_router._cache.clear()
+    calls = []
+    monkeypatch.setattr(model_router, "routing_options", lambda allow_local=True: local_options() if allow_local else options())
+    monkeypatch.setattr(client, "available", lambda: (True, "ready"))
+    def ask(*args, **kwargs):
+        calls.append(1)
+        return {"answers": {"model_1": {"probability": .9}}, "cost": .00004, "usage": {"inputTokens": 900}}
+    monkeypatch.setattr(client, "ask", ask)
+    first = model_router.route("read the README", "gpt-balanced")
+    second = model_router.route("read the README", "gpt-balanced")
+    assert len(calls) == 1
+    assert first.cost_usd > 0 and second.cost_usd == 0 and second.input_tokens == 0
+    model_router.route("read the README", "gpt-balanced", allow_local=False)
+    assert len(calls) == 2
+    model_router._cache.clear()
+
+
+def test_router_failure_falls_back_without_exposing_error(monkeypatch):
+    from panini_cli.jev import client
+    monkeypatch.setattr(model_router, "routing_options", lambda **kwargs: local_options())
+    monkeypatch.setattr(client, "available", lambda: (True, "ready"))
+    def fail(*args, **kwargs):
+        raise OSError("private credential")
+    monkeypatch.setattr(client, "ask", fail)
+    decision = model_router.route("git log", "gpt-balanced")
+    assert decision.model == LOCAL
+    assert "private credential" not in decision.reason
+
+
+def test_simple_definition_bypasses_jev(monkeypatch):
+    from panini_cli.jev import client
+    monkeypatch.setattr(model_router, "routing_options", lambda **kwargs: local_options())
+    monkeypatch.setattr(client, "ask", lambda *a, **k: (_ for _ in ()).throw(AssertionError("paid call")))
+    decision = model_router.route("What is a mutex?", "gpt-strong", 5000)
+    assert decision.model == LOCAL and decision.cost_usd == 0
+    assert decision.context_policy == "independent"
+
+
+def test_routing_retains_the_cheapest_capable_cloud_alternative():
+    decision = model_router.decide(prompt="transform the data", current_model="gpt-balanced",
+        options=local_options(), answers={"model_0": {"probability": .9}, "model_1": {"probability": .8},
+                                         "model_2": {"probability": .95}})
+    assert decision.model == LOCAL and decision.escalation_model == "gpt-cheap"
+
+
+def test_jev_receives_all_topics_and_shared_tool_capabilities(monkeypatch):
+    from panini_cli.jev import client
+    model_router._cache.clear()
+    monkeypatch.setattr(model_router, "routing_options", lambda **kwargs: local_options())
+    monkeypatch.setattr(client, "available", lambda: (True, "ready"))
+    captured = []
+    def ask(state, questions, **kwargs):
+        captured.append(state)
+        return {"answers": {"model_0": {"probability": .9}, "model_1": {"probability": .8}}}
+    monkeypatch.setattr(client, "ask", ask)
+    for prompt in ("inspect memory usage", "write a tiny script", "convert JSON to CSV", "query the connected inventory"):
+        assert model_router.route(prompt, "gpt-balanced").model == LOCAL
+    assert all(len(state["candidates"]) == 4 for state in captured)
+    assert all("All candidates share approved" in state["policy"] for state in captured)
+    assert all("cannot edit" not in state["policy"] for state in captured)
+    model_router._cache.clear()

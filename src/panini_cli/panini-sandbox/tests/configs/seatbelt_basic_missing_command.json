@@ -1,0 +1,9 @@
+{
+    "$schema": "../../schemas/stable/mxc-config.schema.1.0.0.json",
+    "version": "1.0.0",
+    "containment": "seatbelt",
+    "process": {
+        "commandLine": "/nonexistent/definitely-not-a-real-binary-xyz",
+        "timeout": 10000
+    }
+}

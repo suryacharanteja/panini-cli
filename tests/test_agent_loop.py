@@ -111,14 +111,13 @@ async def test_auto_model_routes_before_the_model_turn(monkeypatch, tmp_path):
 
 
 @pytest.mark.anyio
-async def test_local_machine_requests_get_host_context_hint(tmp_path):
+async def test_task_input_is_not_rewritten_by_a_topic_dispatcher(tmp_path):
     host = Host()
     worker, model = agent(tmp_path, [{"text": "Done."}], host)
     result = await worker.turn("check downloads folder")
     assert result.status == "completed"
     prompt = model.requests[0]["items"][0]["content"]
-    assert "%USERPROFILE%\\Downloads" in prompt
-    assert "host-scoped PowerShell" in prompt
+    assert prompt == "check downloads folder"
 
 
 @pytest.mark.anyio
@@ -234,7 +233,7 @@ async def test_routing_happens_once_per_user_message_not_per_tool_step(monkeypat
     monkeypatch.setattr(loop.model_router, "route", route)
     model = SwitchableModel([{"calls": [call("read_file", path="a.txt")]}, {"text": "Done."}])
     worker = Agent(tmp_path, model, Settings(model="auto", sandbox="none"), Host())
-    await worker.turn("read a.txt")
+    await worker.turn("explain a.txt")
     assert len(seen) == 1
     await worker.turn("thanks")
     assert len(seen) == 2
@@ -254,3 +253,66 @@ async def test_a_local_to_cloud_escalation_is_announced_and_stops_local_routing(
     await worker.turn("hello")
     assert any(route.reason.startswith("escalated:") for route in host.routes)
     assert model.escalation is None
+
+
+@pytest.mark.anyio
+async def test_independent_local_turn_slices_history_without_erasing_session(monkeypatch, tmp_path):
+    from panini_cli.agent import loop, model_router
+    monkeypatch.setattr(loop.model_router, "route", lambda *a, **k:
+        model_router.RouteDecision("ollama/qwen2.5:3b-instruct", "local:greeting", True, context_policy="independent"))
+    model = SwitchableModel([{"text": "Hello!"}], model="gpt-strong")
+    worker = Agent(tmp_path, model, Settings(model="auto", sandbox="none"), Host())
+    worker.items.extend([{"role": "user", "content": "previous complex work"}, {"role": "assistant", "content": "done"}])
+    await worker.turn("hi")
+    assert model.requests[0]["items"] == [{"role": "user", "content": "hi"}]
+    assert worker.items[0]["content"] == "previous complex work"
+
+
+@pytest.mark.anyio
+async def test_gateway_spend_is_accounted_once_per_user_turn(monkeypatch, tmp_path):
+    from panini_cli.agent import loop, model_router, ledger
+    records = []
+    monkeypatch.setattr(ledger, "record", lambda kind, **kwargs: records.append((kind, kwargs)))
+    monkeypatch.setattr(loop.model_router, "route", lambda *a, **k:
+        model_router.RouteDecision(a[1], "jev", False, cost_usd=.00004, input_tokens=1000))
+    (tmp_path / "notes.txt").write_text("hi")
+    model = SwitchableModel([{"calls": [call("read_file", path="notes.txt")]}, {"text": "Done."}])
+    worker = Agent(tmp_path, model, Settings(model="auto", sandbox="none"), Host())
+    await worker.turn("explain notes.txt")
+    router = [row for kind, row in records if row.get("model") == "typesafe-ai/jev"]
+    assert len(router) == 1
+    assert router[0]["cost_usd"] == .00004
+    assert worker.cost_usd >= .00004
+
+
+@pytest.mark.anyio
+async def test_tool_batches_preserve_order_and_write_barriers(monkeypatch, tmp_path):
+    worker, model = agent(tmp_path, [
+        {"calls": [call("read_file", path="a"), call("read_file", path="b"),
+                   call("edit_file", path="a"), call("read_file", path="c")]},
+        {"text": "Done."},
+    ], Host())
+    started, completed = [], []
+    both_reads = asyncio.Event()
+
+    async def execute(tool_call):
+        import json
+        path = json.loads(tool_call.arguments)["path"]
+        label = f"{tool_call.name}:{path}"
+        started.append(label)
+        if path in ("a", "b") and tool_call.name == "read_file":
+            if len(started) == 2:
+                both_reads.set()
+            await asyncio.wait_for(both_reads.wait(), timeout=2)
+        elif tool_call.name == "edit_file":
+            assert set(completed) == {"read_file:a", "read_file:b"}
+        else:
+            assert "edit_file:a" in completed
+        completed.append(label)
+        return label, False
+
+    monkeypatch.setattr(worker, "_tool", execute)
+    result = await worker.turn("Read, edit, and read again.")
+    assert result.status == "completed"
+    assert outputs(model) == ["read_file:a", "read_file:b", "edit_file:a", "read_file:c"]
+    await worker.close()

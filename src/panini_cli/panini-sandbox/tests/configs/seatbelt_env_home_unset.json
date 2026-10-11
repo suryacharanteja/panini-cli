@@ -1,0 +1,9 @@
+{
+    "$schema": "../../schemas/stable/mxc-config.schema.1.0.0.json",
+    "version": "1.0.0",
+    "containment": "seatbelt",
+    "process": {
+        "commandLine": "echo \"HOME=[$HOME]\" && echo \"TILDE=[$(echo ~)]\" && echo ENV_HOME_DONE",
+        "timeout": 20000
+    }
+}

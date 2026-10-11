@@ -1,0 +1,20 @@
+{
+  "$schema": "../../schemas/stable/mxc-config.schema.1.0.0.json",
+  "version": "1.0.0",
+  "containerId": "CLI-Bubblewrap-Teardown-Timeout-Netns",
+  "containment": "bubblewrap",
+  "process": {
+    "commandLine": "echo TEARDOWN_STARTED; (/bin/sleep 986; echo TEARDOWN_DESCENDANT_LEAKED) & wait",
+    "timeout": 1500
+  },
+  "network": {
+    "egress": {
+      "default": "deny",
+      "allow": [{ "to": [{ "cidr": "203.0.113.0/24" }] }]
+    },
+    "ingress": {
+      "default": "deny",
+      "hostLoopback": "deny"
+    }
+  }
+}

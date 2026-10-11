@@ -1,0 +1,12 @@
+{
+  "$schema": "../../../schemas/stable/mxc-config.schema.1.0.0.json",
+  "version": "1.0.0",
+  "containerId": "UI-Test-03",
+  "containment": "processcontainer",
+  "process": {
+    "commandLine": "powershell.exe -NoProfile -Command \"$r = Get-Clipboard; Write-Output 'PASS: clipboard read allowed'\"",
+    "timeout": 15000
+  },
+  "processContainer": { "capabilities": [], "ui": { "isolation": "desktop", "desktopSystemControl": false, "systemSettings": "none", "ime": false } },
+  "ui": { "disable": false, "clipboard": "read", "injection": false }
+}

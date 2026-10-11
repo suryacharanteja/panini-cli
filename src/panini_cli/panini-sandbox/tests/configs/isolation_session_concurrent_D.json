@@ -1,0 +1,19 @@
+{
+  "$schema": "../../schemas/stable/mxc-config.schema.1.0.0.json",
+  "version": "1.0.0",
+  "containerId": "isolation-session-concurrent-D",
+  "containment": "isolation_session",
+  "process": {
+    "commandLine": "echo D-start & ping -n 11 127.0.0.1 > nul & echo D-done",
+    "timeout": 30000
+  },
+  "network": {
+    "egress": {
+      "default": "allow"
+    },
+    "ingress": {
+      "default": "allow",
+      "hostLoopback": "allow"
+    }
+  }
+}

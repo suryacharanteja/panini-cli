@@ -1,0 +1,15 @@
+{
+  "$schema": "../../schemas/stable/mxc-config.schema.1.0.0.json",
+  "version": "1.0.0",
+  "containerId": "wslc-python-hello",
+  "containment": "wslc",
+  "process": {
+    "commandLine": "python3 -c \"import sys, platform; print(f'Hello from Python {sys.version}'); print(f'Platform: {platform.platform()}'); print('Script executed successfully in WSL Container')\""
+  },
+  "network": {
+    "egress": { "default": "deny" }
+  },
+  "wslc": {
+    "image": "python:3.12-alpine"
+  }
+}

@@ -1,0 +1,1688 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
+//! Streaming (handle-based) C ABI over the MXC public Rust SDK.
+//!
+//! Where [`mxc_run_json`](crate::mxc_run_json) runs a sandbox to completion
+//! and captures its output, this surface hands the caller a live,
+//! opaque handle it can feed stdin, read stdout/stderr from, wait on, and kill
+//! while the child runs — mirroring [`mxc_sdk::__ffi::spawn_container_json`] /
+//! [`mxc_sdk::v1::MxcProcess`].
+//!
+//! ## Handles & ownership
+//!
+//! - [`mxc_spawn_json`] and
+//!   [`mxc_exec_state_aware_json`](crate::mxc_exec_state_aware_json) return the
+//!   same opaque `*mut MxcSandbox`. Free it exactly once with
+//!   [`mxc_sandbox_free`] (which kills the child tree if still running).
+//! - [`mxc_sandbox_take_stdin`] / [`mxc_sandbox_take_stdout`] /
+//!   [`mxc_sandbox_take_stderr`] each hand out a **separate** opaque stream
+//!   handle (`*mut MxcWriteStream` / `*mut MxcReadStream`) the first time they
+//!   are called, and null thereafter. Each stream handle is independently
+//!   owned and freed via [`mxc_write_stream_free`] / [`mxc_read_stream_free`].
+//!   Because the streams are distinct owned objects, a caller may read stdout
+//!   and stderr and write stdin **concurrently on separate threads**.
+//! - [`mxc_sandbox_take_native_stdio`] instead transfers owned OS pipe endpoints
+//!   for runtimes that can adopt them directly. Endpoints may duplicate native
+//!   backend pipes or be synthesized from callback-backed streams, and
+//!   unsupported directions remain absent. This operation is once-only and
+//!   mutually exclusive with the opaque stream accessors.
+//! - [`mxc_sandbox_stdout_closer`] / [`mxc_sandbox_stderr_closer`] return
+//!   independent [`MxcStreamCloser`] handles. Calling
+//!   [`mxc_stream_closer_close`] unblocks a read without killing the child.
+//!
+//! ## Concurrency contract
+//!
+//! Calls that take an [`MxcSandbox`] handle — process control, stream/closer
+//! accessors, warning/metadata getters, and [`mxc_sandbox_free`] — must be
+//! serialized by the caller. A caller that needs a cancellable wait should poll
+//! [`mxc_sandbox_try_wait`] and call [`mxc_sandbox_kill`] or
+//! [`mxc_sandbox_kill_for_timeout`] from the *same* thread, rather than blocking
+//! one thread in [`mxc_sandbox_wait`] and killing from another. Handles already
+//! returned for streams and closers are separate objects and are unaffected by
+//! this rule.
+//!
+//! Each stream handle is likewise single-owner: [`mxc_stream_read`] /
+//! [`mxc_stream_write`] / [`mxc_stream_flush`] borrow the stream mutably, so
+//! **no two of them may run concurrently on the same stream**, and none may run
+//! concurrently with [`mxc_read_stream_free`] / [`mxc_write_stream_free`].
+//! Overlapping calls alias a `&mut` — undefined behaviour, not merely interleaved
+//! bytes — so a concurrent read-vs-read or write-vs-write is as illegal as a
+//! read-vs-free. Drive each stream from a single thread, and free it only once
+//! its reads and writes have returned. (The C# binding upholds this by holding a
+//! per-handle lock across each native call, which also refcounts the handle via
+//! `SafeHandle` so a free can never race an in-flight call.)
+//!
+//! ## Panics & errors
+//!
+//! Every entry point is wrapped in [`catch_unwind`]; a panic becomes
+//! [`MXC_STATUS_PANIC`] (for `i32`-returning fns) or a null pointer (for
+//! handle-returning fns), never an unwind across the boundary. Stream / process
+//! I/O failures map to [`MXC_STATUS_BACKEND_ERROR`].
+
+use std::ffi::c_char;
+use std::io::{Read, Write};
+use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::ptr;
+
+use mxc_sdk::__ffi::spawn_container_json;
+use mxc_sdk::mxc_common::models::SandboxOutputMetadata;
+use mxc_sdk::mxc_common::sandbox_process::NativeStdio;
+use mxc_sdk::v1::{MxcProcess, MxcPtyProcess, MxcPtySize, StreamCloser, WaitResult};
+
+use crate::{
+    alloc_cstring, cstr_to_str, status_from_error_code, MxcErrorDetail, MXC_STATUS_BACKEND_ERROR,
+    MXC_STATUS_BACKEND_UNAVAILABLE, MXC_STATUS_INVALID_UTF8, MXC_STATUS_NULL_ARGUMENT,
+    MXC_STATUS_PANIC, MXC_STATUS_SUCCESS,
+};
+
+// ---------------------------------------------------------------------------
+// Opaque handles
+// ---------------------------------------------------------------------------
+
+/// Opaque sandbox process handle wrapping an [`mxc_sdk::v1::MxcProcess`]. Created by
+/// [`mxc_spawn_json`] or
+/// [`mxc_exec_state_aware_json`](crate::mxc_exec_state_aware_json), destroyed by
+/// [`mxc_sandbox_free`].
+pub struct MxcSandbox {
+    inner: Box<dyn LiveSandbox>,
+}
+
+impl MxcSandbox {
+    /// Wrap an [`MxcProcess`] as an opaque FFI handle. Used by both the
+    /// one-shot spawn path ([`mxc_spawn_json`]) and the state-aware streaming exec
+    /// path (`mxc_exec_state_aware_json`).
+    pub(crate) fn new(inner: MxcProcess) -> Self {
+        Self {
+            inner: Box::new(inner),
+        }
+    }
+
+    pub(crate) fn new_pty(inner: MxcPtyProcess) -> Self {
+        Self {
+            inner: Box::new(PtySandbox::new(inner)),
+        }
+    }
+
+    pub(crate) fn resize_pty(&self, size: MxcPtySize) -> std::io::Result<()> {
+        self.inner.resize_pty(size)
+    }
+}
+
+trait LiveSandbox: Send {
+    fn warnings(&self) -> Vec<String>;
+    fn output_metadata(&self) -> Option<SandboxOutputMetadata>;
+    fn take_native_stdio(&mut self) -> std::io::Result<Option<NativeStdio>>;
+    fn take_stdin(&mut self) -> Option<Box<dyn Write + Send>>;
+    fn take_stdout(&mut self) -> Option<Box<dyn Read + Send>>;
+    fn take_stderr(&mut self) -> Option<Box<dyn Read + Send>>;
+    fn stdout_closer(&self) -> Option<StreamCloser>;
+    fn stderr_closer(&self) -> Option<StreamCloser>;
+    fn try_wait(&mut self) -> std::io::Result<Option<i32>>;
+    fn id(&self) -> u32;
+    fn kill(&mut self) -> std::io::Result<()>;
+    fn kill_for_timeout(&mut self) -> std::io::Result<()>;
+    fn wait(&mut self) -> std::io::Result<WaitResult>;
+    fn resize_pty(&self, _size: MxcPtySize) -> std::io::Result<()> {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "this sandbox process is not attached to a pseudo-terminal",
+        ))
+    }
+}
+
+impl LiveSandbox for MxcProcess {
+    fn warnings(&self) -> Vec<String> {
+        self.warnings()
+    }
+
+    fn output_metadata(&self) -> Option<SandboxOutputMetadata> {
+        self.output_metadata().cloned()
+    }
+
+    fn take_native_stdio(&mut self) -> std::io::Result<Option<NativeStdio>> {
+        self.take_native_stdio()
+    }
+
+    fn take_stdin(&mut self) -> Option<Box<dyn Write + Send>> {
+        self.take_stdin()
+    }
+
+    fn take_stdout(&mut self) -> Option<Box<dyn Read + Send>> {
+        self.take_stdout()
+    }
+
+    fn take_stderr(&mut self) -> Option<Box<dyn Read + Send>> {
+        self.take_stderr()
+    }
+
+    fn stdout_closer(&self) -> Option<StreamCloser> {
+        self.stdout_closer()
+    }
+
+    fn stderr_closer(&self) -> Option<StreamCloser> {
+        self.stderr_closer()
+    }
+
+    fn try_wait(&mut self) -> std::io::Result<Option<i32>> {
+        self.try_wait()
+    }
+
+    fn id(&self) -> u32 {
+        self.id()
+    }
+
+    fn kill(&mut self) -> std::io::Result<()> {
+        self.kill()
+    }
+
+    fn kill_for_timeout(&mut self) -> std::io::Result<()> {
+        self.kill_for_timeout()
+    }
+
+    fn wait(&mut self) -> std::io::Result<WaitResult> {
+        self.wait()
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+enum PtyStdioAccess {
+    #[default]
+    Untouched,
+    Individual,
+    Native,
+}
+
+struct PtySandbox {
+    inner: MxcPtyProcess,
+    stdio_access: PtyStdioAccess,
+    stdin_taken: bool,
+    stdout_taken: bool,
+}
+
+impl PtySandbox {
+    fn new(inner: MxcPtyProcess) -> Self {
+        Self {
+            inner,
+            stdio_access: PtyStdioAccess::Untouched,
+            stdin_taken: false,
+            stdout_taken: false,
+        }
+    }
+}
+
+impl LiveSandbox for PtySandbox {
+    fn warnings(&self) -> Vec<String> {
+        self.inner.warnings()
+    }
+
+    fn output_metadata(&self) -> Option<SandboxOutputMetadata> {
+        self.inner.output_metadata()
+    }
+
+    fn take_native_stdio(&mut self) -> std::io::Result<Option<NativeStdio>> {
+        match self.stdio_access {
+            PtyStdioAccess::Individual => {
+                return Err(std::io::Error::other(
+                    "native PTY stdio must be taken before taking individual streams",
+                ));
+            }
+            PtyStdioAccess::Native => return Ok(None),
+            PtyStdioAccess::Untouched => {}
+        }
+        let stdio = self.inner.take_native_stdio()?;
+        if stdio.is_some() {
+            self.stdio_access = PtyStdioAccess::Native;
+        }
+        Ok(stdio)
+    }
+
+    fn take_stdin(&mut self) -> Option<Box<dyn Write + Send>> {
+        if self.stdio_access == PtyStdioAccess::Native || self.stdin_taken {
+            return None;
+        }
+        let stdin = self.inner.take_writer().ok();
+        if stdin.is_some() {
+            self.stdin_taken = true;
+            self.stdio_access = PtyStdioAccess::Individual;
+        }
+        stdin
+    }
+
+    fn take_stdout(&mut self) -> Option<Box<dyn Read + Send>> {
+        if self.stdio_access == PtyStdioAccess::Native || self.stdout_taken {
+            return None;
+        }
+        let stdout = self.inner.try_clone_reader().ok();
+        if stdout.is_some() {
+            self.stdout_taken = true;
+            self.stdio_access = PtyStdioAccess::Individual;
+        }
+        stdout
+    }
+
+    fn take_stderr(&mut self) -> Option<Box<dyn Read + Send>> {
+        None
+    }
+
+    fn stdout_closer(&self) -> Option<StreamCloser> {
+        self.inner.stdout_closer()
+    }
+
+    fn stderr_closer(&self) -> Option<StreamCloser> {
+        None
+    }
+
+    fn try_wait(&mut self) -> std::io::Result<Option<i32>> {
+        self.inner.try_wait()
+    }
+
+    fn id(&self) -> u32 {
+        self.inner.id()
+    }
+
+    fn kill(&mut self) -> std::io::Result<()> {
+        self.inner.kill()
+    }
+
+    fn kill_for_timeout(&mut self) -> std::io::Result<()> {
+        self.inner.kill_for_timeout()
+    }
+
+    fn wait(&mut self) -> std::io::Result<WaitResult> {
+        self.inner.wait()
+    }
+
+    fn resize_pty(&self, size: MxcPtySize) -> std::io::Result<()> {
+        self.inner.resize(size)
+    }
+}
+
+/// Opaque readable stream (a child's stdout or stderr), handed out by
+/// [`mxc_sandbox_take_stdout`] / [`mxc_sandbox_take_stderr`].
+pub struct MxcReadStream {
+    pub(crate) inner: Box<dyn Read + Send>,
+}
+
+/// Opaque writable stream (a child's stdin), handed out by
+/// [`mxc_sandbox_take_stdin`]. Freeing it closes stdin, signalling EOF to the
+/// child.
+pub struct MxcWriteStream {
+    pub(crate) inner: Box<dyn Write + Send>,
+}
+
+/// Opaque closer for a child's stdout or stderr stream.
+pub struct MxcStreamCloser {
+    inner: StreamCloser,
+}
+
+/// Caller-owned native stdio endpoints.
+///
+/// Values are Win32 `HANDLE`s on Windows and file descriptors on Unix.
+/// Absent endpoints are `0` on Windows and `-1` on Unix.
+#[repr(C)]
+pub struct MxcNativeStdio {
+    pub stdin_handle: isize,
+    pub stdout_handle: isize,
+    pub stderr_handle: isize,
+}
+
+impl MxcNativeStdio {
+    pub(crate) const fn invalid() -> Self {
+        #[cfg(target_os = "windows")]
+        const INVALID: isize = 0;
+        #[cfg(not(target_os = "windows"))]
+        const INVALID: isize = -1;
+
+        Self {
+            stdin_handle: INVALID,
+            stdout_handle: INVALID,
+            stderr_handle: INVALID,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Spawn
+// ---------------------------------------------------------------------------
+
+/// Spawn a raw exact-version one-shot JSON request as a live sandboxed process.
+///
+/// `request_json_utf8` is a public MXC configuration with an exact registered
+/// `version`. `experimental` is nonzero to permit an experimental backend,
+/// which is otherwise refused with `backend_unavailable`; it is ignored for
+/// production backends and never read from the JSON.
+///
+/// # Safety
+/// - `request_json_utf8` must be null or valid NUL-terminated UTF-8.
+/// - `out_handle` must point to writable pointer-sized storage holding no live
+///   handle. On success the caller owns `*out_handle` and frees it with
+///   [`mxc_sandbox_free`].
+/// - `out_error` must be null or point to writable storage holding no live
+///   detail. After a failure the caller frees it with
+///   [`mxc_error_detail_free`](crate::mxc_error_detail_free).
+#[no_mangle]
+pub unsafe extern "C" fn mxc_spawn_json(
+    request_json_utf8: *const c_char,
+    experimental: i32,
+    out_handle: *mut *mut MxcSandbox,
+    out_error: *mut MxcErrorDetail,
+) -> i32 {
+    if !out_handle.is_null() {
+        // SAFETY: caller-guaranteed writable pointer-sized storage.
+        unsafe { *out_handle = ptr::null_mut() };
+    }
+    if !out_error.is_null() {
+        // SAFETY: caller-guaranteed writable storage for one fresh detail.
+        unsafe { ptr::write(out_error, MxcErrorDetail::none()) };
+    }
+    if out_handle.is_null() {
+        return MXC_STATUS_NULL_ARGUMENT;
+    }
+    let outcome = catch_unwind(AssertUnwindSafe(|| {
+        spawn_json_inner(request_json_utf8, experimental != 0)
+    }))
+    .unwrap_or_else(|panic| {
+        crate::report_panic("mxc_spawn_json", &*panic);
+        Err((
+            MXC_STATUS_PANIC,
+            MxcErrorDetail::from_message("the mxc engine panicked"),
+        ))
+    });
+
+    // SAFETY: `out_handle` is non-null and `out_error` is null or writable.
+    unsafe { finish_spawn(outcome, out_handle, out_error) }
+}
+
+fn spawn_json_inner(
+    request_json_utf8: *const c_char,
+    experimental: bool,
+) -> Result<MxcProcess, (i32, MxcErrorDetail)> {
+    // SAFETY: caller contract on `mxc_spawn_json`; borrowed only within scope.
+    let request_json = match unsafe { cstr_to_str(request_json_utf8) } {
+        Some(value) => value,
+        None if request_json_utf8.is_null() => {
+            return Err((
+                MXC_STATUS_NULL_ARGUMENT,
+                MxcErrorDetail::from_message("request JSON pointer is null"),
+            ))
+        }
+        None => {
+            return Err((
+                MXC_STATUS_INVALID_UTF8,
+                MxcErrorDetail::from_message("request JSON is not UTF-8"),
+            ))
+        }
+    };
+    spawn_container_json(request_json, experimental).map_err(sdk_error_detail)
+}
+
+/// Shared tail of the handle-returning spawn entry points
+/// ([`mxc_spawn_json`] and `mxc_exec_state_aware_json`): on success box the
+/// [`MxcProcess`] into an [`MxcSandbox`] handle and write it to `*out_handle`; on
+/// failure hand the detail to `*out_error` (when non-null) and return the
+/// status.
+///
+/// # Safety
+/// `out_handle` must be non-null and writable; `out_error` must be null or
+/// point to writable storage for one [`MxcErrorDetail`].
+pub(crate) unsafe fn finish_spawn(
+    outcome: Result<MxcProcess, (i32, MxcErrorDetail)>,
+    out_handle: *mut *mut MxcSandbox,
+    out_error: *mut MxcErrorDetail,
+) -> i32 {
+    unsafe { finish_handle(outcome.map(MxcSandbox::new), out_handle, out_error) }
+}
+
+pub(crate) unsafe fn finish_handle(
+    outcome: Result<MxcSandbox, (i32, MxcErrorDetail)>,
+    out_handle: *mut *mut MxcSandbox,
+    out_error: *mut MxcErrorDetail,
+) -> i32 {
+    match outcome {
+        Ok(sandbox) => {
+            let boxed = Box::new(sandbox);
+            // SAFETY: `out_handle` non-null and writable per the caller contract.
+            unsafe { *out_handle = Box::into_raw(boxed) };
+            MXC_STATUS_SUCCESS
+        }
+        Err((status, mut detail)) => {
+            if out_error.is_null() {
+                // The caller does not want the detail, but it already owns heap
+                // strings — dropping the struct would leak every one of them,
+                // because raw pointers have no destructor.
+                detail.free_strings();
+            } else {
+                // SAFETY: `out_error` non-null and writable per the caller contract,
+                // and initialised to an all-null detail by every caller before this
+                // point -- so nothing live is overwritten here.
+                unsafe { *out_error = detail };
+            }
+            status
+        }
+    }
+}
+
+/// Map an SDK error onto the status + detail pair the spawn chain carries, so
+/// the failing API call survives instead of being flattened to a message.
+pub(crate) fn sdk_error_detail(error: mxc_sdk::v1::Error) -> (i32, MxcErrorDetail) {
+    (
+        status_from_error_code(error.code),
+        MxcErrorDetail::from_error(&error),
+    )
+}
+
+// ---------------------------------------------------------------------------
+// Stream accessors
+// ---------------------------------------------------------------------------
+
+/// Take the child's stdin stream. Returns null if `handle` is null, stdin was
+/// not piped, or stdin was already taken. The returned handle must be freed
+/// with [`mxc_write_stream_free`] (which closes stdin, sending EOF).
+///
+/// # Safety
+/// `handle` must be null or a live handle from [`mxc_spawn_json`] or
+/// [`mxc_exec_state_aware_json`](crate::mxc_exec_state_aware_json).
+#[no_mangle]
+pub unsafe extern "C" fn mxc_sandbox_take_stdin(handle: *mut MxcSandbox) -> *mut MxcWriteStream {
+    take_stream(handle, |s| {
+        s.inner.take_stdin().map(|inner| MxcWriteStream { inner })
+    })
+}
+
+/// Take the child's stdout stream. Returns null if `handle` is null, stdout was
+/// not piped, or stdout was already taken. Free with [`mxc_read_stream_free`].
+///
+/// # Safety
+/// `handle` must be null or a live handle from [`mxc_spawn_json`] or
+/// [`mxc_exec_state_aware_json`](crate::mxc_exec_state_aware_json).
+#[no_mangle]
+pub unsafe extern "C" fn mxc_sandbox_take_stdout(handle: *mut MxcSandbox) -> *mut MxcReadStream {
+    take_read_stream(handle, |s| s.inner.take_stdout())
+}
+
+/// Take the child's stderr stream. Returns null if `handle` is null, stderr was
+/// not piped, or stderr was already taken. Free with [`mxc_read_stream_free`].
+///
+/// # Safety
+/// `handle` must be null or a live handle from [`mxc_spawn_json`] or
+/// [`mxc_exec_state_aware_json`](crate::mxc_exec_state_aware_json).
+#[no_mangle]
+pub unsafe extern "C" fn mxc_sandbox_take_stderr(handle: *mut MxcSandbox) -> *mut MxcReadStream {
+    take_read_stream(handle, |s| s.inner.take_stderr())
+}
+
+/// Transfer the child's native stdio endpoints to the caller.
+///
+/// On success, each non-sentinel endpoint is owned by the caller and must be
+/// adopted by the language runtime or closed with [`mxc_native_pipe_close`].
+/// Backends may duplicate existing native pipes or synthesize pipes from live
+/// callback-backed streams. Unsupported directions use the platform sentinel.
+/// Returns [`MXC_STATUS_BACKEND_UNAVAILABLE`] if the backend cannot expose
+/// native endpoints or the endpoints were already transferred. Returns
+/// [`MXC_STATUS_BACKEND_ERROR`] if an individual stream was already taken or
+/// preparing an endpoint fails.
+///
+/// Returns [`MXC_STATUS_NULL_ARGUMENT`] if `handle` or `out_stdio` is null.
+///
+/// # Safety
+/// - `handle` must be null or a live handle from [`mxc_spawn_json`] or
+///   [`mxc_exec_state_aware_json`](crate::mxc_exec_state_aware_json).
+/// - `out_stdio` must point to writable storage for one [`MxcNativeStdio`].
+#[no_mangle]
+pub unsafe extern "C" fn mxc_sandbox_take_native_stdio(
+    handle: *mut MxcSandbox,
+    out_stdio: *mut MxcNativeStdio,
+) -> i32 {
+    if out_stdio.is_null() {
+        return MXC_STATUS_NULL_ARGUMENT;
+    }
+    // SAFETY: caller-guaranteed writable storage. Initialize before fallible
+    // work so failure never exposes stale handles.
+    unsafe { ptr::write(out_stdio, MxcNativeStdio::invalid()) };
+    if handle.is_null() {
+        return MXC_STATUS_NULL_ARGUMENT;
+    }
+
+    catch_unwind(AssertUnwindSafe(|| {
+        // SAFETY: non-null live handle per the caller contract.
+        let sandbox = unsafe { &mut *handle };
+        match sandbox.inner.take_native_stdio() {
+            Ok(Some(stdio)) => {
+                let result = MxcNativeStdio {
+                    stdin_handle: native_pipe_into_raw(stdio.stdin),
+                    stdout_handle: native_pipe_into_raw(stdio.stdout),
+                    stderr_handle: native_pipe_into_raw(stdio.stderr),
+                };
+                // SAFETY: non-null writable output per the caller contract.
+                unsafe { ptr::write(out_stdio, result) };
+                MXC_STATUS_SUCCESS
+            }
+            Ok(None) => MXC_STATUS_BACKEND_UNAVAILABLE,
+            Err(error) => {
+                crate::report_to_stderr(format_args!(
+                    "mxc_sandbox_take_native_stdio failed: {error}"
+                ));
+                MXC_STATUS_BACKEND_ERROR
+            }
+        }
+    }))
+    .unwrap_or_else(|panic| {
+        crate::report_panic("mxc_sandbox_take_native_stdio", &*panic);
+        MXC_STATUS_PANIC
+    })
+}
+
+#[cfg(target_os = "windows")]
+fn native_pipe_into_raw(pipe: Option<std::os::windows::io::OwnedHandle>) -> isize {
+    use std::os::windows::io::IntoRawHandle;
+    pipe.map_or(0, |handle| handle.into_raw_handle() as isize)
+}
+
+#[cfg(not(target_os = "windows"))]
+fn native_pipe_into_raw(pipe: Option<std::os::fd::OwnedFd>) -> isize {
+    use std::os::fd::IntoRawFd;
+    pipe.map_or(-1, |fd| fd.into_raw_fd() as isize)
+}
+
+/// Close a native endpoint that the caller could not adopt.
+///
+/// # Safety
+/// `handle` must be an owned endpoint returned by
+/// [`mxc_sandbox_take_native_stdio`] and must not have been closed or adopted.
+/// Passing the platform sentinel (`0` on Windows, `-1` on Unix) is a no-op.
+#[no_mangle]
+pub unsafe extern "C" fn mxc_native_pipe_close(handle: isize) {
+    if let Err(panic) = catch_unwind(AssertUnwindSafe(|| close_native_pipe(handle))) {
+        crate::report_panic("mxc_native_pipe_close", &*panic);
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn close_native_pipe(handle: isize) {
+    use std::os::windows::io::{FromRawHandle, OwnedHandle};
+    if handle != 0 && handle != -1 {
+        // SAFETY: caller transfers one live owned handle to this function.
+        drop(unsafe { OwnedHandle::from_raw_handle(handle as _) });
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn close_native_pipe(handle: isize) {
+    use std::os::fd::{FromRawFd, OwnedFd};
+    if let Ok(fd) = i32::try_from(handle) {
+        if fd >= 0 {
+            // SAFETY: caller transfers one live owned descriptor to this function.
+            drop(unsafe { OwnedFd::from_raw_fd(fd) });
+        }
+    }
+}
+
+/// Return a closer that unblocks reads on stdout without killing the child.
+///
+/// Returns null if `handle` is null or this backend has no interruptible stdout
+/// stream. The returned handle is independent of the stdout reader and must be
+/// freed with [`mxc_stream_closer_free`].
+///
+/// # Safety
+/// `handle` must be null or a live handle from [`mxc_spawn_json`] or
+/// [`mxc_exec_state_aware_json`](crate::mxc_exec_state_aware_json).
+#[no_mangle]
+pub unsafe extern "C" fn mxc_sandbox_stdout_closer(
+    handle: *mut MxcSandbox,
+) -> *mut MxcStreamCloser {
+    take_closer(handle, |s| s.inner.stdout_closer())
+}
+
+/// Return a closer that unblocks reads on stderr without killing the child.
+///
+/// Returns null if `handle` is null or this backend has no interruptible stderr
+/// stream. Free the returned handle with [`mxc_stream_closer_free`].
+///
+/// # Safety
+/// `handle` must be null or a live handle from [`mxc_spawn_json`] or
+/// [`mxc_exec_state_aware_json`](crate::mxc_exec_state_aware_json).
+#[no_mangle]
+pub unsafe extern "C" fn mxc_sandbox_stderr_closer(
+    handle: *mut MxcSandbox,
+) -> *mut MxcStreamCloser {
+    take_closer(handle, |s| s.inner.stderr_closer())
+}
+
+fn take_stream(
+    handle: *mut MxcSandbox,
+    take: impl FnOnce(&mut MxcSandbox) -> Option<MxcWriteStream>,
+) -> *mut MxcWriteStream {
+    if handle.is_null() {
+        return ptr::null_mut();
+    }
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        // SAFETY: non-null live handle per the caller contract; borrowed only
+        // for the duration of this call.
+        let sandbox = unsafe { &mut *handle };
+        take(sandbox).map(|s| Box::into_raw(Box::new(s)))
+    }));
+    result
+        .unwrap_or_else(|panic| {
+            crate::report_panic("mxc_sandbox_take_stdin", &*panic);
+            None
+        })
+        .unwrap_or(ptr::null_mut())
+}
+
+fn take_read_stream(
+    handle: *mut MxcSandbox,
+    take: impl FnOnce(&mut MxcSandbox) -> Option<Box<dyn Read + Send>>,
+) -> *mut MxcReadStream {
+    if handle.is_null() {
+        return ptr::null_mut();
+    }
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        // SAFETY: non-null live handle per the caller contract.
+        let sandbox = unsafe { &mut *handle };
+        take(sandbox).map(|inner| Box::into_raw(Box::new(MxcReadStream { inner })))
+    }));
+    result
+        .unwrap_or_else(|panic| {
+            crate::report_panic("mxc_sandbox_take_stdout_or_stderr", &*panic);
+            None
+        })
+        .unwrap_or(ptr::null_mut())
+}
+
+fn take_closer(
+    handle: *mut MxcSandbox,
+    take: impl FnOnce(&MxcSandbox) -> Option<StreamCloser>,
+) -> *mut MxcStreamCloser {
+    if handle.is_null() {
+        return ptr::null_mut();
+    }
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        // SAFETY: non-null live handle per the caller contract.
+        let sandbox = unsafe { &*handle };
+        take(sandbox).map(|inner| Box::into_raw(Box::new(MxcStreamCloser { inner })))
+    }));
+    result
+        .unwrap_or_else(|panic| {
+            crate::report_panic("mxc_sandbox_take_stdout_or_stderr_closer", &*panic);
+            None
+        })
+        .unwrap_or(ptr::null_mut())
+}
+
+// ---------------------------------------------------------------------------
+// Stream I/O
+// ---------------------------------------------------------------------------
+
+/// Read up to `cap` bytes from `stream` into `buf`, writing the number of bytes
+/// read to `*out_read`. A read of `0` bytes signals end-of-stream (EOF). Blocks
+/// until at least one byte is available, EOF, or an error.
+///
+/// Returns [`MXC_STATUS_SUCCESS`], [`MXC_STATUS_NULL_ARGUMENT`] if any pointer
+/// is null, or [`MXC_STATUS_BACKEND_ERROR`] on an I/O error.
+///
+/// # Safety
+/// - `stream` must be null or a live handle from a `take_std*` call.
+/// - `buf` must be null or point to at least `cap` writable bytes.
+/// - `out_read` must be null or point to writable `usize` storage.
+#[no_mangle]
+pub unsafe extern "C" fn mxc_stream_read(
+    stream: *mut MxcReadStream,
+    buf: *mut u8,
+    cap: usize,
+    out_read: *mut usize,
+) -> i32 {
+    if stream.is_null() || buf.is_null() || out_read.is_null() {
+        return MXC_STATUS_NULL_ARGUMENT;
+    }
+    // SAFETY: `out_read` is non-null and caller-guaranteed writable. Zero it
+    // before any fallible work so a caught panic or I/O error never leaves the
+    // caller's prior value behind.
+    unsafe { *out_read = 0 };
+    let status = catch_unwind(AssertUnwindSafe(|| {
+        // SAFETY: `stream` non-null live handle; `buf`/`cap` describe a valid
+        // writable region per the caller contract.
+        let s = unsafe { &mut *stream };
+        let slice = unsafe { std::slice::from_raw_parts_mut(buf, cap) };
+        match s.inner.read(slice) {
+            Ok(n) => {
+                // SAFETY: `out_read` non-null writable per the caller contract.
+                unsafe { *out_read = n };
+                MXC_STATUS_SUCCESS
+            }
+            Err(_) => MXC_STATUS_BACKEND_ERROR,
+        }
+    }));
+    status.unwrap_or_else(|panic| {
+        crate::report_panic("mxc_stream_read", &*panic);
+        MXC_STATUS_PANIC
+    })
+}
+
+/// Write up to `len` bytes from `buf` to `stream`, writing the number of bytes
+/// actually written to `*out_written`. May write fewer than `len` bytes.
+///
+/// Returns [`MXC_STATUS_SUCCESS`], [`MXC_STATUS_NULL_ARGUMENT`] if any pointer
+/// is null, or [`MXC_STATUS_BACKEND_ERROR`] on an I/O error.
+///
+/// # Safety
+/// - `stream` must be null or a live handle from [`mxc_sandbox_take_stdin`].
+/// - `buf` must be null or point to at least `len` readable bytes.
+/// - `out_written` must be null or point to writable `usize` storage.
+#[no_mangle]
+pub unsafe extern "C" fn mxc_stream_write(
+    stream: *mut MxcWriteStream,
+    buf: *const u8,
+    len: usize,
+    out_written: *mut usize,
+) -> i32 {
+    if stream.is_null() || buf.is_null() || out_written.is_null() {
+        return MXC_STATUS_NULL_ARGUMENT;
+    }
+    // SAFETY: `out_written` is non-null and caller-guaranteed writable. Zero
+    // it before any fallible work so a caught panic or I/O error never leaves
+    // the caller's prior value behind.
+    unsafe { *out_written = 0 };
+    let status = catch_unwind(AssertUnwindSafe(|| {
+        // SAFETY: `stream` non-null live handle; `buf`/`len` describe a valid
+        // readable region per the caller contract.
+        let s = unsafe { &mut *stream };
+        let slice = unsafe { std::slice::from_raw_parts(buf, len) };
+        match s.inner.write(slice) {
+            Ok(n) => {
+                // SAFETY: `out_written` non-null writable per the caller contract.
+                unsafe { *out_written = n };
+                MXC_STATUS_SUCCESS
+            }
+            Err(_) => MXC_STATUS_BACKEND_ERROR,
+        }
+    }));
+    status.unwrap_or_else(|panic| {
+        crate::report_panic("mxc_stream_write", &*panic);
+        MXC_STATUS_PANIC
+    })
+}
+
+/// Flush any buffered bytes on a stdin stream.
+///
+/// # Safety
+/// `stream` must be null or a live handle from [`mxc_sandbox_take_stdin`].
+#[no_mangle]
+pub unsafe extern "C" fn mxc_stream_flush(stream: *mut MxcWriteStream) -> i32 {
+    if stream.is_null() {
+        return MXC_STATUS_NULL_ARGUMENT;
+    }
+    let status = catch_unwind(AssertUnwindSafe(|| {
+        // SAFETY: `stream` non-null live handle per the caller contract.
+        let s = unsafe { &mut *stream };
+        match s.inner.flush() {
+            Ok(()) => MXC_STATUS_SUCCESS,
+            Err(_) => MXC_STATUS_BACKEND_ERROR,
+        }
+    }));
+    status.unwrap_or_else(|panic| {
+        crate::report_panic("mxc_stream_flush", &*panic);
+        MXC_STATUS_PANIC
+    })
+}
+
+/// Close a stdout/stderr reader through its independent closer.
+///
+/// Makes an in-flight or subsequent read return EOF without killing the child.
+/// Idempotent and safe to call after the reader has already reached EOF.
+/// Multiple calls may run concurrently on the same closer, but no call may
+/// overlap [`mxc_stream_closer_free`].
+///
+/// # Safety
+/// `closer` must be null or a live handle from
+/// [`mxc_sandbox_stdout_closer`] / [`mxc_sandbox_stderr_closer`].
+#[no_mangle]
+pub unsafe extern "C" fn mxc_stream_closer_close(closer: *mut MxcStreamCloser) -> i32 {
+    if closer.is_null() {
+        return MXC_STATUS_NULL_ARGUMENT;
+    }
+    catch_unwind(AssertUnwindSafe(|| {
+        // SAFETY: non-null live handle per the caller contract. StreamCloser is
+        // Sync and close takes &self, so concurrent close calls do not alias &mut.
+        unsafe { &*closer }.inner.close();
+        MXC_STATUS_SUCCESS
+    }))
+    .unwrap_or_else(|panic| {
+        crate::report_panic("mxc_stream_closer_close", &*panic);
+        MXC_STATUS_PANIC
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Process control
+// ---------------------------------------------------------------------------
+
+/// Return the child's OS process id, or `0` if `handle` is null.
+///
+/// # Safety
+/// `handle` must be null or a live handle from [`mxc_spawn_json`] or
+/// [`mxc_exec_state_aware_json`](crate::mxc_exec_state_aware_json).
+#[no_mangle]
+pub unsafe extern "C" fn mxc_sandbox_id(handle: *mut MxcSandbox) -> u32 {
+    if handle.is_null() {
+        return 0;
+    }
+    catch_unwind(AssertUnwindSafe(|| {
+        // SAFETY: non-null live handle per the caller contract.
+        let sandbox = unsafe { &*handle };
+        sandbox.inner.id()
+    }))
+    .unwrap_or_else(|panic| {
+        crate::report_panic("mxc_sandbox_id", &*panic);
+        0
+    })
+}
+
+/// Return structured output metadata as owned JSON. A successful call leaves
+/// `*out_json_utf8` null when the sandbox has not completed or produced no
+/// metadata.
+///
+/// The caller owns a non-null `*out_json_utf8` and must free it with
+/// [`mxc_string_free`](crate::mxc_string_free).
+///
+/// # Safety
+/// - `handle` must be null or a live handle from [`mxc_spawn_json`] or
+///   [`mxc_exec_state_aware_json`](crate::mxc_exec_state_aware_json).
+/// - `out_json_utf8` must be non-null and point to writable pointer storage.
+#[no_mangle]
+pub unsafe extern "C" fn mxc_sandbox_output_metadata_json(
+    handle: *mut MxcSandbox,
+    out_json_utf8: *mut *mut c_char,
+) -> i32 {
+    if !out_json_utf8.is_null() {
+        // SAFETY: caller-guaranteed writable pointer-sized storage.
+        unsafe { *out_json_utf8 = ptr::null_mut() };
+    }
+    if handle.is_null() || out_json_utf8.is_null() {
+        return MXC_STATUS_NULL_ARGUMENT;
+    }
+
+    catch_unwind(AssertUnwindSafe(|| {
+        // SAFETY: non-null live handle per the caller contract.
+        let sandbox = unsafe { &*handle };
+        let Some(metadata) = sandbox.inner.output_metadata() else {
+            return MXC_STATUS_SUCCESS;
+        };
+        let json = match serde_json::to_vec(&metadata) {
+            Ok(json) => json,
+            Err(_) => return MXC_STATUS_BACKEND_ERROR,
+        };
+        // SAFETY: non-null writable out pointer per the caller contract.
+        unsafe { *out_json_utf8 = alloc_cstring(&json) };
+        MXC_STATUS_SUCCESS
+    }))
+    .unwrap_or_else(|panic| {
+        crate::report_panic("mxc_sandbox_output_metadata_json", &*panic);
+        MXC_STATUS_PANIC
+    })
+}
+
+/// Return the sandbox's security warnings as owned JSON.
+///
+/// A successful call leaves `*out_json_utf8` null when there are no warnings.
+/// The caller owns a non-null result and must free it with
+/// [`mxc_string_free`](crate::mxc_string_free).
+///
+/// # Safety
+/// - `handle` must be null or a live handle from [`mxc_spawn_json`] or
+///   [`mxc_exec_state_aware_json`](crate::mxc_exec_state_aware_json).
+/// - `out_json_utf8` must be non-null and point to writable pointer storage.
+#[no_mangle]
+pub unsafe extern "C" fn mxc_sandbox_warnings_json(
+    handle: *mut MxcSandbox,
+    out_json_utf8: *mut *mut c_char,
+) -> i32 {
+    if !out_json_utf8.is_null() {
+        // SAFETY: caller-guaranteed writable pointer-sized storage.
+        unsafe { *out_json_utf8 = ptr::null_mut() };
+    }
+    if handle.is_null() || out_json_utf8.is_null() {
+        return MXC_STATUS_NULL_ARGUMENT;
+    }
+
+    catch_unwind(AssertUnwindSafe(|| {
+        // SAFETY: non-null live handle per the caller contract.
+        let sandbox = unsafe { &*handle };
+        let warnings = sandbox.inner.warnings();
+        if warnings.is_empty() {
+            return MXC_STATUS_SUCCESS;
+        }
+        let json = match serde_json::to_vec(&warnings) {
+            Ok(json) => json,
+            Err(_) => return MXC_STATUS_BACKEND_ERROR,
+        };
+        // SAFETY: non-null writable out pointer per the caller contract.
+        unsafe { *out_json_utf8 = alloc_cstring(&json) };
+        MXC_STATUS_SUCCESS
+    }))
+    .unwrap_or_else(|panic| {
+        crate::report_panic("mxc_sandbox_warnings_json", &*panic);
+        MXC_STATUS_PANIC
+    })
+}
+
+/// Non-blocking completion check. On return, `*out_running` is `1` if the child
+/// is still running. For a normal exit it is `0`, `*out_exit` holds the exit
+/// code, and `*out_timed_out` is `0`. For a finalized timeout it is `0`,
+/// `*out_exit` is `-1`, and `*out_timed_out` is `1`.
+///
+/// Returns [`MXC_STATUS_SUCCESS`], [`MXC_STATUS_NULL_ARGUMENT`] if any pointer
+/// is null, or [`MXC_STATUS_BACKEND_ERROR`] on a wait error.
+///
+/// # Safety
+/// - `handle` must be null or a live handle from [`mxc_spawn_json`] or
+///   [`mxc_exec_state_aware_json`](crate::mxc_exec_state_aware_json).
+/// - `out_exit` / `out_running` / `out_timed_out` must be null or point to
+///   writable `i32` storage.
+#[no_mangle]
+pub unsafe extern "C" fn mxc_sandbox_try_wait(
+    handle: *mut MxcSandbox,
+    out_exit: *mut i32,
+    out_running: *mut i32,
+    out_timed_out: *mut i32,
+) -> i32 {
+    if handle.is_null() || out_exit.is_null() || out_running.is_null() || out_timed_out.is_null() {
+        return MXC_STATUS_NULL_ARGUMENT;
+    }
+    // SAFETY: out-params are non-null and caller-guaranteed writable. Zero
+    // them before any fallible work so a caught panic or backend error never
+    // leaks the caller's previous values back out.
+    unsafe {
+        *out_exit = 0;
+        *out_running = 0;
+        *out_timed_out = 0;
+    }
+    let status = catch_unwind(AssertUnwindSafe(|| {
+        // SAFETY: non-null live handle per the caller contract.
+        let sandbox = unsafe { &mut *handle };
+        match try_wait_result_to_abi(sandbox.inner.try_wait()) {
+            Ok((exit, running, timed_out)) => {
+                // SAFETY: out-params non-null writable per the caller contract.
+                unsafe {
+                    *out_exit = exit;
+                    *out_running = running;
+                    *out_timed_out = timed_out;
+                }
+                MXC_STATUS_SUCCESS
+            }
+            Err(status) => status,
+        }
+    }));
+    status.unwrap_or_else(|panic| {
+        crate::report_panic("mxc_sandbox_try_wait", &*panic);
+        MXC_STATUS_PANIC
+    })
+}
+
+fn try_wait_result_to_abi(result: std::io::Result<Option<i32>>) -> Result<(i32, i32, i32), i32> {
+    match result {
+        Ok(Some(code)) => Ok((code, 0, 0)),
+        Ok(None) => Ok((0, 1, 0)),
+        Err(error) if error.kind() == std::io::ErrorKind::TimedOut => Ok((-1, 0, 1)),
+        Err(_) => Err(MXC_STATUS_BACKEND_ERROR),
+    }
+}
+
+/// Block until the child exits (honouring the request's `scriptTimeout`),
+/// draining any untaken stdout/stderr so it cannot block on a full pipe. On a
+/// normal exit `*out_exit` holds the exit code and `*out_timed_out` is `0`; on
+/// timeout `*out_timed_out` is `1` and `*out_exit` is set to `-1`.
+///
+/// Must not be called concurrently with [`mxc_sandbox_kill`] on the same handle
+/// (see the module concurrency contract).
+///
+/// # Safety
+/// - `handle` must be null or a live handle from [`mxc_spawn_json`] or
+///   [`mxc_exec_state_aware_json`](crate::mxc_exec_state_aware_json).
+/// - `out_exit` / `out_timed_out` must be null or writable `i32` storage.
+#[no_mangle]
+pub unsafe extern "C" fn mxc_sandbox_wait(
+    handle: *mut MxcSandbox,
+    out_exit: *mut i32,
+    out_timed_out: *mut i32,
+) -> i32 {
+    if handle.is_null() || out_exit.is_null() || out_timed_out.is_null() {
+        return MXC_STATUS_NULL_ARGUMENT;
+    }
+    // SAFETY: out-params are non-null and caller-guaranteed writable. Zero
+    // them before any fallible work so a caught panic or backend error never
+    // leaks the caller's previous values back out.
+    unsafe {
+        *out_exit = 0;
+        *out_timed_out = 0;
+    }
+    let status = catch_unwind(AssertUnwindSafe(|| {
+        // SAFETY: non-null live handle per the caller contract.
+        let sandbox = unsafe { &mut *handle };
+        match sandbox.inner.wait() {
+            Ok(WaitResult::Exited(code)) => {
+                // SAFETY: out-params non-null writable per the caller contract.
+                unsafe {
+                    *out_exit = code;
+                    *out_timed_out = 0;
+                }
+                MXC_STATUS_SUCCESS
+            }
+            Ok(WaitResult::TimedOut) => {
+                // SAFETY: out-params non-null writable per the caller contract.
+                unsafe {
+                    *out_exit = -1;
+                    *out_timed_out = 1;
+                }
+                MXC_STATUS_SUCCESS
+            }
+            Err(_) => MXC_STATUS_BACKEND_ERROR,
+        }
+    }));
+    status.unwrap_or_else(|panic| {
+        crate::report_panic("mxc_sandbox_wait", &*panic);
+        MXC_STATUS_PANIC
+    })
+}
+
+/// Kill the child and its whole process tree. Reaping happens in a subsequent
+/// [`mxc_sandbox_wait`] / [`mxc_sandbox_try_wait`] or in [`mxc_sandbox_free`].
+///
+/// # Safety
+/// `handle` must be null or a live handle from [`mxc_spawn_json`] or
+/// [`mxc_exec_state_aware_json`](crate::mxc_exec_state_aware_json).
+#[no_mangle]
+pub unsafe extern "C" fn mxc_sandbox_kill(handle: *mut MxcSandbox) -> i32 {
+    if handle.is_null() {
+        return MXC_STATUS_NULL_ARGUMENT;
+    }
+    let status = catch_unwind(AssertUnwindSafe(|| {
+        // SAFETY: non-null live handle per the caller contract.
+        let sandbox = unsafe { &mut *handle };
+        match sandbox.inner.kill() {
+            Ok(()) => MXC_STATUS_SUCCESS,
+            Err(_) => MXC_STATUS_BACKEND_ERROR,
+        }
+    }));
+    status.unwrap_or_else(|panic| {
+        crate::report_panic("mxc_sandbox_kill", &*panic);
+        MXC_STATUS_PANIC
+    })
+}
+
+/// Kill the child and its whole process tree because the caller's deadline
+/// elapsed. Reaping happens in a subsequent [`mxc_sandbox_wait`] /
+/// [`mxc_sandbox_try_wait`] or in [`mxc_sandbox_free`].
+///
+/// After this call, a later successful terminal observation is reported as
+/// timed out. Call this function only after the deadline has actually elapsed.
+///
+/// # Safety
+/// `handle` must be null or a live handle from [`mxc_spawn_json`] or
+/// [`mxc_exec_state_aware_json`](crate::mxc_exec_state_aware_json).
+#[no_mangle]
+pub unsafe extern "C" fn mxc_sandbox_kill_for_timeout(handle: *mut MxcSandbox) -> i32 {
+    if handle.is_null() {
+        return MXC_STATUS_NULL_ARGUMENT;
+    }
+    let status = catch_unwind(AssertUnwindSafe(|| {
+        // SAFETY: non-null live handle per the caller contract.
+        let sandbox = unsafe { &mut *handle };
+        match sandbox.inner.kill_for_timeout() {
+            Ok(()) => MXC_STATUS_SUCCESS,
+            Err(_) => MXC_STATUS_BACKEND_ERROR,
+        }
+    }));
+    status.unwrap_or_else(|panic| {
+        crate::report_panic("mxc_sandbox_kill_for_timeout", &*panic);
+        MXC_STATUS_PANIC
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Handle destructors
+// ---------------------------------------------------------------------------
+
+/// Free a sandbox handle from [`mxc_spawn_json`] or
+/// [`mxc_exec_state_aware_json`](crate::mxc_exec_state_aware_json), killing the
+/// child tree if it is still running. Safe to call with null (no-op). Must be
+/// called exactly once per handle.
+///
+/// # Safety
+/// `handle` must be null or a live, not-yet-freed handle from
+/// [`mxc_spawn_json`] or
+/// [`mxc_exec_state_aware_json`](crate::mxc_exec_state_aware_json).
+#[no_mangle]
+pub unsafe extern "C" fn mxc_sandbox_free(handle: *mut MxcSandbox) {
+    if handle.is_null() {
+        return;
+    }
+    if let Err(panic) = catch_unwind(AssertUnwindSafe(|| {
+        // SAFETY: non-null handle produced by `Box::into_raw` in `finish_spawn`,
+        // not yet freed; reconstructing the Box drops it (and its child).
+        drop(unsafe { Box::from_raw(handle) });
+    })) {
+        crate::report_panic("mxc_sandbox_free", &*panic);
+    }
+}
+
+/// Free a readable stream handle. Safe to call with null (no-op). Must be
+/// called exactly once per handle.
+///
+/// # Safety
+/// `stream` must be null or a live, not-yet-freed handle from a
+/// `mxc_sandbox_take_stdout` / `mxc_sandbox_take_stderr` call.
+#[no_mangle]
+pub unsafe extern "C" fn mxc_read_stream_free(stream: *mut MxcReadStream) {
+    if stream.is_null() {
+        return;
+    }
+    if let Err(panic) = catch_unwind(AssertUnwindSafe(|| {
+        // SAFETY: non-null handle produced by `Box::into_raw`, not yet freed.
+        drop(unsafe { Box::from_raw(stream) });
+    })) {
+        crate::report_panic("mxc_read_stream_free", &*panic);
+    }
+}
+
+/// Free a writable (stdin) stream handle, closing stdin and sending EOF to the
+/// child. Safe to call with null (no-op). Must be called exactly once.
+///
+/// # Safety
+/// `stream` must be null or a live, not-yet-freed handle from
+/// [`mxc_sandbox_take_stdin`].
+#[no_mangle]
+pub unsafe extern "C" fn mxc_write_stream_free(stream: *mut MxcWriteStream) {
+    if stream.is_null() {
+        return;
+    }
+    if let Err(panic) = catch_unwind(AssertUnwindSafe(|| {
+        // SAFETY: non-null handle produced by `Box::into_raw`, not yet freed.
+        drop(unsafe { Box::from_raw(stream) });
+    })) {
+        crate::report_panic("mxc_write_stream_free", &*panic);
+    }
+}
+
+/// Free a stream-closer handle. Safe to call with null (no-op). Must be called
+/// exactly once and not concurrently with [`mxc_stream_closer_close`].
+///
+/// # Safety
+/// `closer` must be null or a live, not-yet-freed handle from
+/// [`mxc_sandbox_stdout_closer`] / [`mxc_sandbox_stderr_closer`].
+#[no_mangle]
+pub unsafe extern "C" fn mxc_stream_closer_free(closer: *mut MxcStreamCloser) {
+    if closer.is_null() {
+        return;
+    }
+    if let Err(panic) = catch_unwind(AssertUnwindSafe(|| {
+        // SAFETY: non-null handle produced by Box::into_raw, not yet freed.
+        drop(unsafe { Box::from_raw(closer) });
+    })) {
+        crate::report_panic("mxc_stream_closer_free", &*panic);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    #[test]
+    fn try_wait_preserves_timeout_as_a_terminal_outcome() {
+        assert_eq!(try_wait_result_to_abi(Ok(Some(42))), Ok((42, 0, 0)));
+        assert_eq!(try_wait_result_to_abi(Ok(None)), Ok((0, 1, 0)));
+        assert_eq!(
+            try_wait_result_to_abi(Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "deadline elapsed"
+            ))),
+            Ok((-1, 0, 1))
+        );
+        assert_eq!(
+            try_wait_result_to_abi(Err(std::io::Error::other("wait failed"))),
+            Err(MXC_STATUS_BACKEND_ERROR)
+        );
+    }
+    use std::ffi::CString;
+
+    use crate::MXC_STATUS_MALFORMED_REQUEST;
+
+    static NEXT_CONTAINER_ID: AtomicU64 = AtomicU64::new(0);
+
+    fn request(command: &str) -> CString {
+        let container_id = format!(
+            "ffi-stream-{}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos(),
+            NEXT_CONTAINER_ID.fetch_add(1, Ordering::Relaxed)
+        );
+        CString::new(
+            serde_json::json!({
+                "version": "1.0.0",
+                "containerId": container_id,
+                "process": {
+                    "commandLine": command
+                }
+            })
+            .to_string(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn real_host_requests_use_distinct_container_ids() {
+        let first: serde_json::Value =
+            serde_json::from_slice(request("echo first").as_bytes()).unwrap();
+        let second: serde_json::Value =
+            serde_json::from_slice(request("echo second").as_bytes()).unwrap();
+        assert!(first["containerId"]
+            .as_str()
+            .is_some_and(|id| id.starts_with("ffi-stream-")));
+        assert_ne!(first["containerId"], second["containerId"]);
+    }
+
+    struct PanicReader;
+
+    impl Read for PanicReader {
+        fn read(&mut self, _buf: &mut [u8]) -> std::io::Result<usize> {
+            panic!("forced panic in test reader");
+        }
+    }
+
+    struct PanicWriter;
+
+    impl Write for PanicWriter {
+        fn write(&mut self, _buf: &[u8]) -> std::io::Result<usize> {
+            panic!("forced panic in test writer");
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    struct PanicFlushWriter;
+
+    impl Write for PanicFlushWriter {
+        fn write(&mut self, _buf: &[u8]) -> std::io::Result<usize> {
+            Ok(0)
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            panic!("forced panic in test flush");
+        }
+    }
+
+    #[test]
+    fn spawn_null_out_handle_is_null_argument() {
+        let request = request("echo hi");
+        // SAFETY: valid string, deliberately-null out_handle.
+        let status =
+            unsafe { mxc_spawn_json(request.as_ptr(), 0, ptr::null_mut(), ptr::null_mut()) };
+        assert_eq!(status, MXC_STATUS_NULL_ARGUMENT);
+    }
+
+    #[test]
+    fn spawn_null_request_reports_null_argument() {
+        let mut handle: *mut MxcSandbox = ptr::null_mut();
+        let mut err = MxcErrorDetail::none();
+        // SAFETY: null request pointer is explicitly handled.
+        let status = unsafe { mxc_spawn_json(ptr::null(), 0, &mut handle, &mut err) };
+        assert_eq!(status, MXC_STATUS_NULL_ARGUMENT);
+        assert!(handle.is_null());
+        assert!(
+            !err.message_utf8.is_null(),
+            "an error message should be provided"
+        );
+        // SAFETY: `err` was filled by `mxc_spawn_json` and not yet freed.
+        unsafe { crate::mxc_error_detail_free(&mut err) };
+    }
+
+    #[test]
+    fn spawn_malformed_request_reports_malformed_request() {
+        let request = CString::new("{ not json").unwrap();
+        let mut handle: *mut MxcSandbox = ptr::null_mut();
+        let mut err = MxcErrorDetail::none();
+        // SAFETY: valid string and valid out pointers.
+        let status = unsafe { mxc_spawn_json(request.as_ptr(), 0, &mut handle, &mut err) };
+        assert_eq!(status, MXC_STATUS_MALFORMED_REQUEST);
+        assert!(handle.is_null());
+        assert!(!err.message_utf8.is_null());
+        // SAFETY: `err` was filled by `mxc_spawn_json` and not yet freed.
+        unsafe { crate::mxc_error_detail_free(&mut err) };
+    }
+
+    #[test]
+    fn spawn_empty_command_reports_malformed_request() {
+        let request = request("");
+        let mut handle: *mut MxcSandbox = ptr::null_mut();
+        let mut err = MxcErrorDetail::none();
+
+        // SAFETY: valid string and valid out pointers.
+        let status = unsafe { mxc_spawn_json(request.as_ptr(), 0, &mut handle, &mut err) };
+        assert_eq!(status, MXC_STATUS_MALFORMED_REQUEST);
+        assert!(handle.is_null());
+        assert!(!err.message_utf8.is_null());
+
+        // SAFETY: `err` was filled by `mxc_spawn_json`.
+        let message = unsafe { std::ffi::CStr::from_ptr(err.message_utf8) }
+            .to_str()
+            .unwrap();
+        assert!(!message.is_empty());
+
+        // SAFETY: `err` was filled by `mxc_spawn_json` and not yet freed.
+        unsafe { crate::mxc_error_detail_free(&mut err) };
+    }
+
+    #[test]
+    fn spawn_null_error_out_is_tolerated() {
+        let request = CString::new("{ not json").unwrap();
+        let mut handle: *mut MxcSandbox = ptr::null_mut();
+        // SAFETY: valid string; null out_error must be tolerated.
+        let status = unsafe { mxc_spawn_json(request.as_ptr(), 0, &mut handle, ptr::null_mut()) };
+        assert_eq!(status, MXC_STATUS_MALFORMED_REQUEST);
+        assert!(handle.is_null());
+    }
+
+    #[test]
+    fn null_stream_and_control_ops_report_null_argument() {
+        let mut n: usize = 0;
+        let mut i: i32 = 0;
+        let mut j: i32 = 0;
+        // SAFETY: every argument is null / benign; each fn must reject cleanly.
+        unsafe {
+            assert_eq!(
+                mxc_stream_read(ptr::null_mut(), ptr::null_mut(), 0, &mut n),
+                MXC_STATUS_NULL_ARGUMENT
+            );
+            assert_eq!(
+                mxc_stream_write(ptr::null_mut(), ptr::null(), 0, &mut n),
+                MXC_STATUS_NULL_ARGUMENT
+            );
+            assert_eq!(mxc_stream_flush(ptr::null_mut()), MXC_STATUS_NULL_ARGUMENT);
+            assert_eq!(
+                mxc_stream_closer_close(ptr::null_mut()),
+                MXC_STATUS_NULL_ARGUMENT
+            );
+            assert_eq!(mxc_sandbox_id(ptr::null_mut()), 0);
+            let mut metadata = ptr::null_mut();
+            assert_eq!(
+                mxc_sandbox_output_metadata_json(ptr::null_mut(), &mut metadata),
+                MXC_STATUS_NULL_ARGUMENT
+            );
+            let mut warnings = ptr::null_mut();
+            assert_eq!(
+                mxc_sandbox_warnings_json(ptr::null_mut(), &mut warnings),
+                MXC_STATUS_NULL_ARGUMENT
+            );
+            assert_eq!(
+                mxc_sandbox_try_wait(ptr::null_mut(), &mut i, &mut j, &mut j),
+                MXC_STATUS_NULL_ARGUMENT
+            );
+            assert_eq!(
+                mxc_sandbox_wait(ptr::null_mut(), &mut i, &mut j),
+                MXC_STATUS_NULL_ARGUMENT
+            );
+            assert_eq!(mxc_sandbox_kill(ptr::null_mut()), MXC_STATUS_NULL_ARGUMENT);
+            assert_eq!(
+                mxc_sandbox_kill_for_timeout(ptr::null_mut()),
+                MXC_STATUS_NULL_ARGUMENT
+            );
+        }
+    }
+
+    #[test]
+    fn take_from_null_handle_returns_null() {
+        // SAFETY: null handles are explicitly allowed and return null.
+        unsafe {
+            assert!(mxc_sandbox_take_stdin(ptr::null_mut()).is_null());
+            assert!(mxc_sandbox_take_stdout(ptr::null_mut()).is_null());
+            assert!(mxc_sandbox_take_stderr(ptr::null_mut()).is_null());
+            assert!(mxc_sandbox_stdout_closer(ptr::null_mut()).is_null());
+            assert!(mxc_sandbox_stderr_closer(ptr::null_mut()).is_null());
+        }
+    }
+
+    #[test]
+    fn native_stdio_from_null_handle_initializes_sentinels() {
+        let mut stdio = MxcNativeStdio {
+            stdin_handle: 1,
+            stdout_handle: 2,
+            stderr_handle: 3,
+        };
+
+        // SAFETY: null sandbox handles are rejected and `stdio` is writable.
+        let status = unsafe { mxc_sandbox_take_native_stdio(ptr::null_mut(), &mut stdio) };
+
+        assert_eq!(status, MXC_STATUS_NULL_ARGUMENT);
+        let invalid = MxcNativeStdio::invalid();
+        assert_eq!(stdio.stdin_handle, invalid.stdin_handle);
+        assert_eq!(stdio.stdout_handle, invalid.stdout_handle);
+        assert_eq!(stdio.stderr_handle, invalid.stderr_handle);
+    }
+
+    #[test]
+    fn closing_native_stdio_sentinels_is_safe() {
+        // SAFETY: platform sentinel values are explicitly accepted as no-ops.
+        unsafe {
+            #[cfg(target_os = "windows")]
+            {
+                mxc_native_pipe_close(0);
+                mxc_native_pipe_close(-1);
+            }
+            #[cfg(not(target_os = "windows"))]
+            mxc_native_pipe_close(-1);
+        }
+    }
+
+    #[test]
+    fn freeing_null_handles_is_safe() {
+        // SAFETY: null is explicitly allowed for every destructor.
+        unsafe {
+            mxc_sandbox_free(ptr::null_mut());
+            mxc_read_stream_free(ptr::null_mut());
+            mxc_write_stream_free(ptr::null_mut());
+            mxc_stream_closer_free(ptr::null_mut());
+        }
+    }
+
+    #[test]
+    fn stream_read_panic_zeroes_out_read_before_returning_panic() {
+        let mut stream = MxcReadStream {
+            inner: Box::new(PanicReader),
+        };
+        let mut buf = [0u8; 8];
+        let mut out_read = usize::MAX;
+        // SAFETY: `stream`, `buf`, and `out_read` are valid for this call.
+        let status =
+            unsafe { mxc_stream_read(&mut stream, buf.as_mut_ptr(), buf.len(), &mut out_read) };
+        assert_eq!(status, MXC_STATUS_PANIC);
+        assert_eq!(out_read, 0);
+    }
+
+    #[test]
+    fn stream_write_panic_zeroes_out_written_before_returning_panic() {
+        let mut stream = MxcWriteStream {
+            inner: Box::new(PanicWriter),
+        };
+        let buf = *b"panic";
+        let mut out_written = usize::MAX;
+        // SAFETY: `stream`, `buf`, and `out_written` are valid for this call.
+        let status =
+            unsafe { mxc_stream_write(&mut stream, buf.as_ptr(), buf.len(), &mut out_written) };
+        assert_eq!(status, MXC_STATUS_PANIC);
+        assert_eq!(out_written, 0);
+    }
+
+    #[test]
+    fn stream_flush_panic_returns_panic_status() {
+        let mut stream = MxcWriteStream {
+            inner: Box::new(PanicFlushWriter),
+        };
+        // SAFETY: `stream` is a valid live stream handle.
+        let status = unsafe { mxc_stream_flush(&mut stream) };
+        assert_eq!(status, MXC_STATUS_PANIC);
+    }
+
+    /// Full streaming round-trip against a real sandbox: spawn `echo`, drain
+    /// stdout to EOF, and wait for a clean exit. Ignored by default because it
+    /// requires a host able to launch a sandboxed process (host-prepped Windows
+    /// / capable Linux or macOS); run explicitly on such a host with
+    /// `cargo test -p mxc_ffi -- --ignored real_echo_streaming_roundtrip`.
+    #[test]
+    #[ignore]
+    fn real_echo_streaming_roundtrip() {
+        #[cfg(target_os = "windows")]
+        let command = "C:\\Windows\\System32\\cmd.exe /c echo mxc_stream_ok";
+        #[cfg(not(target_os = "windows"))]
+        let command = "echo mxc_stream_ok";
+        let request = request(command);
+
+        let mut handle: *mut MxcSandbox = ptr::null_mut();
+        let mut err = MxcErrorDetail::none();
+        // SAFETY: valid string and out pointers.
+        let status = unsafe { mxc_spawn_json(request.as_ptr(), 0, &mut handle, &mut err) };
+        assert_eq!(status, MXC_STATUS_SUCCESS, "spawn failed (status {status})");
+        assert!(!handle.is_null());
+
+        // SAFETY: live handle from a successful spawn.
+        let stdout = unsafe { mxc_sandbox_take_stdout(handle) };
+        assert!(!stdout.is_null(), "stdout should be piped");
+
+        let mut collected = Vec::new();
+        let mut buf = [0u8; 256];
+        loop {
+            let mut got: usize = 0;
+            // SAFETY: live stream, valid buffer + out pointer.
+            let rc = unsafe { mxc_stream_read(stdout, buf.as_mut_ptr(), buf.len(), &mut got) };
+            assert_eq!(rc, MXC_STATUS_SUCCESS);
+            if got == 0 {
+                break; // EOF
+            }
+            collected.extend_from_slice(&buf[..got]);
+        }
+
+        let mut exit = -999;
+        let mut timed_out = -1;
+        // SAFETY: live handle and valid out pointers.
+        let rc = unsafe { mxc_sandbox_wait(handle, &mut exit, &mut timed_out) };
+        assert_eq!(rc, MXC_STATUS_SUCCESS);
+        assert_eq!(timed_out, 0);
+        assert_eq!(exit, 0, "echo should exit 0");
+
+        let text = String::from_utf8_lossy(&collected);
+        assert!(text.contains("mxc_stream_ok"), "stdout was: {text:?}");
+
+        // SAFETY: live handles freed exactly once.
+        unsafe {
+            mxc_read_stream_free(stdout);
+            mxc_sandbox_free(handle);
+        }
+    }
+
+    /// Real write→read round-trip: feed stdin via `mxc_stream_write` and read
+    /// the echoed line back via `mxc_stream_read`. Proves the FFI write path
+    /// (only exercised indirectly by the C# suite otherwise). Ignored like the
+    /// other real-host tests.
+    #[test]
+    #[ignore]
+    #[cfg(target_os = "windows")]
+    fn real_stdin_write_stdout_read_roundtrip() {
+        // A cmd builtin that reads one stdin line and echoes it back.
+        let request = request("C:\\Windows\\System32\\cmd.exe /v:on /c set /p x= & echo GOT:!x!");
+
+        let mut handle: *mut MxcSandbox = ptr::null_mut();
+        let mut err = MxcErrorDetail::none();
+        // SAFETY: valid string and out pointers.
+        let status = unsafe { mxc_spawn_json(request.as_ptr(), 0, &mut handle, &mut err) };
+        assert_eq!(status, MXC_STATUS_SUCCESS, "spawn failed (status {status})");
+
+        // SAFETY: live handle.
+        let stdin = unsafe { mxc_sandbox_take_stdin(handle) };
+        let stdout = unsafe { mxc_sandbox_take_stdout(handle) };
+        assert!(!stdin.is_null() && !stdout.is_null());
+
+        let line = b"mxc_write_ok\r\n";
+        let mut written = 0usize;
+        // SAFETY: live stream + valid buffer.
+        let rc = unsafe { mxc_stream_write(stdin, line.as_ptr(), line.len(), &mut written) };
+        assert_eq!(rc, MXC_STATUS_SUCCESS);
+        assert!(written > 0);
+        // Close stdin so `set /p` completes.
+        unsafe { mxc_write_stream_free(stdin) };
+
+        let mut collected = Vec::new();
+        let mut buf = [0u8; 256];
+        loop {
+            let mut got = 0usize;
+            // SAFETY: live stream + valid buffer.
+            let rc = unsafe { mxc_stream_read(stdout, buf.as_mut_ptr(), buf.len(), &mut got) };
+            assert_eq!(rc, MXC_STATUS_SUCCESS);
+            if got == 0 {
+                break;
+            }
+            collected.extend_from_slice(&buf[..got]);
+        }
+        let text = String::from_utf8_lossy(&collected);
+        assert!(text.contains("GOT:mxc_write_ok"), "stdout was: {text:?}");
+
+        let mut exit = -1;
+        let mut timed_out = -1;
+        // SAFETY: live handle + out pointers.
+        let rc = unsafe { mxc_sandbox_wait(handle, &mut exit, &mut timed_out) };
+        assert_eq!(rc, MXC_STATUS_SUCCESS);
+        assert_eq!(exit, 0);
+
+        // SAFETY: live handles freed once.
+        unsafe {
+            mxc_read_stream_free(stdout);
+            mxc_sandbox_free(handle);
+        }
+    }
+
+    /// Real kill: spawn a child blocked on stdin, `mxc_sandbox_kill` it, and
+    /// confirm the wait then reports it gone. Proves the FFI kill path directly.
+    #[test]
+    #[ignore]
+    #[cfg(target_os = "windows")]
+    fn real_kill_terminates_blocked_child() {
+        // Blocks reading a stdin line; we keep stdin open (never take it) so it
+        // stays parked until killed.
+        let request = request("C:\\Windows\\System32\\cmd.exe /v:on /c set /p x= & echo done");
+
+        let mut handle: *mut MxcSandbox = ptr::null_mut();
+        let mut err = MxcErrorDetail::none();
+        // SAFETY: valid string and out pointers.
+        let status = unsafe { mxc_spawn_json(request.as_ptr(), 0, &mut handle, &mut err) };
+        assert_eq!(status, MXC_STATUS_SUCCESS, "spawn failed (status {status})");
+
+        // Child should still be running.
+        let mut exit = i32::MIN;
+        let mut running = -1;
+        // SAFETY: live handle + out pointers.
+        let mut timed_out = -1;
+        let rc = unsafe { mxc_sandbox_try_wait(handle, &mut exit, &mut running, &mut timed_out) };
+        assert_eq!(rc, MXC_STATUS_SUCCESS);
+        assert_eq!(running, 1, "blocked child should still be running");
+        assert_eq!(exit, 0, "running poll should leave the zero sentinel");
+        assert_eq!(timed_out, 0);
+
+        // SAFETY: live handle.
+        let rc = unsafe { mxc_sandbox_kill(handle) };
+        assert_eq!(rc, MXC_STATUS_SUCCESS);
+
+        // Wait reaps the killed child.
+        let mut timed_out = -1;
+        // SAFETY: live handle + out pointers.
+        let rc = unsafe { mxc_sandbox_wait(handle, &mut exit, &mut timed_out) };
+        assert_eq!(rc, MXC_STATUS_SUCCESS);
+        assert_ne!(exit, 0, "a killed child should not exit cleanly");
+
+        // SAFETY: live handle freed once.
+        unsafe { mxc_sandbox_free(handle) };
+    }
+}

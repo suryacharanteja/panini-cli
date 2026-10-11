@@ -9,12 +9,25 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import tomllib
 from pathlib import Path
 
 
 def enabled():
     return os.getenv("PANINI_CLI_AUTO_VERIFY", "1").lower() not in ("0", "false", "no", "off")
+
+
+def is_check(command, detected):
+    """A successful diagnostic is not evidence that a requested acceptance check passed."""
+    if not isinstance(command, str) or any(char in command for char in ";&|\n\r`$"):
+        return False
+    try:
+        actual = shlex.split(command, posix=False)
+        return any(actual[:len(expected)] == expected for candidate in detected
+                   if (expected := shlex.split(candidate.removesuffix(" -q"), posix=False)))
+    except ValueError:
+        return False
 
 
 def commands(workspace):
@@ -78,7 +91,7 @@ def instructions(workspace):
 def reminder(changed, found):
     files = ", ".join(changed[:8]) + (" …" if len(changed) > 8 else "")
     return (
-        "[PANINI verification check] You changed " + files + " but have not run any command since. "
-        "Run the relevant check (" + ", ".join(f"`{c}`" for c in found) + ") and report the result, "
+        "[PANINI verification check] You changed " + files + " but lack a successful relevant acceptance check since the latest edit. "
+        "Run the relevant check (" + (", ".join(f"`{c}`" for c in found) or "a focused executable check of the requested result") + ") and report the result, "
         "or explain why it cannot be run, before finishing."
     )

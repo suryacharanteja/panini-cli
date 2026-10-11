@@ -1,0 +1,15 @@
+{
+  "$schema": "../../schemas/stable/mxc-config.schema.1.0.0.json",
+  "version": "1.0.0",
+  "containerId": "wslc-python-stdlib",
+  "containment": "wslc",
+  "process": {
+    "commandLine": "python3 -c \"import json, math, hashlib, platform; data = {'pi': round(math.pi, 6), 'e': round(math.e, 6), 'hash': hashlib.sha256(b'mxc-wslc').hexdigest()[:16], 'platform': platform.system()}; print(json.dumps(data, indent=2))\""
+  },
+  "network": {
+    "egress": { "default": "deny" }
+  },
+  "wslc": {
+    "image": "python:3.12-alpine"
+  }
+}

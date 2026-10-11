@@ -120,7 +120,7 @@ async def test_finishing_after_a_change_without_running_checks_gets_one_reminder
 
 
 @pytest.mark.anyio
-async def test_no_reminder_when_a_command_ran_after_the_change(tmp_path):
+async def test_diagnostic_command_does_not_satisfy_verification(tmp_path):
     (tmp_path / "pyproject.toml").write_text("[tool.pytest.ini_options]\n")
     steps = [
         {"calls": [{"name": "write_file", "arguments": {"path": "a.py", "content": "x = 1\n"}}]},
@@ -129,14 +129,14 @@ async def test_no_reminder_when_a_command_ran_after_the_change(tmp_path):
     ]
     agent = Agent(tmp_path, ScriptedModel(steps), Settings(sandbox="none"), Host())
     result = await agent.turn("write a.py")
-    assert result.text == "Done." and result.steps == 3
+    assert result.text == "Done." and result.steps == 4 and result.status == "unverified"
 
 
 # --- the local tier: questions only, honest answers ---------------------------------------
 
-def test_edit_requests_never_route_to_the_local_model():
-    for prompt in ("rename foo to bar", "fix the typo", "write a hello script", "add a docstring"):
-        assert complexity.estimate(prompt).tier != "local", prompt
+def test_bounded_edits_are_not_categorically_excluded_from_local():
+    assert complexity.estimate("rename foo to bar").tier == "local"
+    assert complexity.estimate("write a hello script").tier == "local"
     assert complexity.estimate("what does main.py do?").tier == "local"
 
 
@@ -160,6 +160,88 @@ class LocalThenCloud(ScriptedModel):
 
 
 @pytest.mark.anyio
+async def test_unverified_local_edits_escalate_without_reapplying_changes(tmp_path, monkeypatch):
+    from panini_cli.agent import loop, model_router
+    monkeypatch.setattr(loop.model_router, "route", lambda *a, **k:
+        model_router.RouteDecision(a[1], "jev", False))
+    model = LocalThenCloud([
+        {"calls": [{"name": "write_file", "arguments": {"path": "result.txt", "content": "42"}}]},
+        {"text": "Done."}, {"text": "Done."}, {"text": "Cloud continues from applied change."}])
+    worker = Agent(tmp_path, model, Settings(model="auto", sandbox="none", acceptance_checks=("python -m pytest",)), Host())
+    result = await worker.turn("save the result")
+    assert result.text == "Cloud continues from applied change."
+    assert (tmp_path / "result.txt").read_text() == "42"
+    evidence = model.requests[-1]["items"]
+    assert sum(i.get("type") == "function_call" for i in evidence) == 1
+    assert any(i.get("type") == "function_call_output" for i in evidence)
+    assert result.status == "unverified"
+    assert any("python -m pytest" in str(i.get("content", "")) for i in evidence)
+
+
+@pytest.mark.anyio
+async def test_repeated_tool_errors_escalate_with_failure_evidence(tmp_path, monkeypatch):
+    from panini_cli.agent import loop, model_router
+    monkeypatch.setattr(loop.model_router, "route", lambda *a, **k:
+        model_router.RouteDecision(a[1], "jev", False))
+    model = LocalThenCloud([
+        {"calls": [{"name": "read_file", "arguments": {"path": "missing.txt"}}]},
+        {"calls": [{"name": "read_file", "arguments": {"path": "missing.txt"}}]},
+        {"text": "The file is missing."}])
+    worker = Agent(tmp_path, model, Settings(model="auto", sandbox="none"), Host())
+    result = await worker.turn("inspect a file")
+    assert result.text == "The file is missing." and not model.model.startswith("ollama/")
+    assert len([i for i in model.requests[-1]["items"] if i.get("type") == "function_call_output"]) == 2
+
+
+@pytest.mark.anyio
+async def test_local_tool_loop_has_bounded_steps(tmp_path, monkeypatch):
+    from panini_cli.agent import loop, model_router
+    monkeypatch.setattr(loop.model_router, "route", lambda *a, **k:
+        model_router.RouteDecision(a[1], "jev", False))
+    model = LocalThenCloud([{"calls": [{"name": "list_files", "arguments": {}}]} for _ in range(6)]
+                           + [{"text": "Cloud finishes the inspection."}])
+    worker = Agent(tmp_path, model, Settings(model="auto", sandbox="none"), Host())
+    result = await worker.turn("inspect the workspace")
+    assert result.steps == 7 and not model.model.startswith("ollama/")
+    assert result.text == "Cloud finishes the inspection."
+
+
+@pytest.mark.anyio
+async def test_denial_skips_quality_retry_and_keeps_provider(tmp_path, monkeypatch):
+    from panini_cli.agent import completion, loop, model_router
+    monkeypatch.setattr(loop.model_router, "route", lambda *a, **k:
+        model_router.RouteDecision(a[1], "jev", False))
+    monkeypatch.setattr(completion, "check", lambda *a: pytest.fail("denied work evaluated for retry"))
+    class Decline(Host):
+        async def approve(self, item):
+            return "decline"
+    model = LocalThenCloud([
+        {"calls": [{"name": "write_file", "arguments": {"path": "result.txt", "content": "42"}}]},
+        {"text": "The action was declined."}])
+    worker = Agent(tmp_path, model, Settings(model="auto", sandbox="none"), Decline())
+    await worker.turn("save to result.txt")
+    assert not model.local_blocked and not (tmp_path / "result.txt").exists()
+
+
+@pytest.mark.anyio
+async def test_failed_completion_check_retries_from_tool_evidence_and_accounts_cost(tmp_path, monkeypatch):
+    from panini_cli.agent import completion, loop, model_router
+    monkeypatch.setattr(loop.model_router, "route", lambda *a, **k:
+        model_router.RouteDecision(a[1], "jev", False))
+    monkeypatch.setattr(completion, "check", lambda *a: completion.Check(False, .00005, 500))
+    (tmp_path / "values.txt").write_text("42")
+    model = LocalThenCloud([
+        {"calls": [{"name": "read_file", "arguments": {"path": "values.txt"}}]},
+        {"text": "The value is 99."}, {"text": "The recorded value is 42."}])
+    worker = Agent(tmp_path, model, Settings(model="auto", sandbox="none"), Host())
+    result = await worker.turn("read the value")
+    assert result.text == "The recorded value is 42." and not model.model.startswith("ollama/")
+    assert worker.cost_usd >= .00005 and result.cost_usd >= .00005
+    assert any(i.get("type") == "function_call_output" for i in model.requests[-1]["items"])
+    assert not any(i.get("content") == "The value is 99." for i in model.requests[-1]["items"])
+
+
+@pytest.mark.anyio
 async def test_a_local_claim_of_unmade_changes_is_redone_in_the_cloud(tmp_path, monkeypatch):
     from panini_cli.agent import loop, model_router
 
@@ -169,16 +251,11 @@ async def test_a_local_claim_of_unmade_changes_is_redone_in_the_cloud(tmp_path, 
     agent = Agent(tmp_path, model, Settings(model="auto", sandbox="none"), host)
     result = await agent.turn("what is going on")
     assert result.text == "Cloud did it properly."
-    assert not model.model.startswith("ollama/") and model.local_blocked
+    assert not model.model.startswith("ollama/") and not model.local_blocked
     assert not any("has been renamed" in str(item.get("content")) for item in agent.items)
     assert any(route.reason.startswith("escalated:") for route in host.routes)
 
 
-def test_local_model_gets_a_reduced_tool_set():
-    from panini_cli.agent import tools
-
-    names = {tool["name"] for tool in tools.TOOLS if tool["name"] in tools.LOCAL_TOOLS}
-    assert "apply_patch" not in names and "terminal_start" not in names and "read_file" in names
 
 
 # --- local scout ----------------------------------------------------------------------------
@@ -229,7 +306,7 @@ async def test_a_local_answer_about_an_unread_file_is_redone_in_the_cloud(tmp_pa
     model = LocalThenCloud([{"text": "add() returns the sum."}, {"text": "add() returns a - b."}])
     agent = Agent(tmp_path, model, Settings(model="auto", sandbox="none"), Host())
     result = await agent.turn("What does add() in calc.py return?")
-    assert result.text == "add() returns a - b." and model.local_blocked
+    assert result.text == "add() returns a - b." and not model.model.startswith("ollama/")
 
 
 @pytest.mark.anyio

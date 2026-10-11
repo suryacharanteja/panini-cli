@@ -131,14 +131,14 @@ def test_sandbox_argv_isolates_the_command(tmp_path):
 def test_sandboxed_agent_runs_commands_through_docker(tmp_path, monkeypatch):
     seen = {}
 
-    async def fake_run(command, cwd, timeout, on_output=None, environ=None, argv=None):
+    async def fake_run(command, cwd, timeout, on_output=None, environ=None, argv=None, **kwargs):
         seen["argv"] = argv
         from panini_cli.agent.shell import CommandResult
 
         return CommandResult(0, "ok", 0.1, False, 0)
 
     removed = []
-    monkeypatch.setattr("panini_cli.agent.loop.run_command", fake_run)
+    monkeypatch.setattr("panini_cli.agent.execution.run_command", fake_run)
     monkeypatch.setattr(sandbox, "remove", removed.append)
     model = ScriptedModel(
         [
@@ -156,13 +156,13 @@ def test_sandboxed_agent_runs_commands_through_docker(tmp_path, monkeypatch):
 def test_agent_routes_approved_commands_through_native_sandbox(tmp_path, monkeypatch):
     seen = {}
 
-    async def fake_run(command, cwd, timeout, on_output=None, environ=None, argv=None):
+    async def fake_run(command, cwd, timeout, on_output=None, environ=None, argv=None, **kwargs):
         seen["argv"] = argv
         from panini_cli.agent.shell import CommandResult
 
         return CommandResult(0, "ok", 0.1, False, 0)
 
-    monkeypatch.setattr("panini_cli.agent.loop.run_command", fake_run)
+    monkeypatch.setattr("panini_cli.agent.execution.run_command", fake_run)
     monkeypatch.setattr(codex_sandbox, "executable", lambda: "codex.exe")
     model = ScriptedModel(
         [

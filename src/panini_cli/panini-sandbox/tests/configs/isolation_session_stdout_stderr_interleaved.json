@@ -1,0 +1,19 @@
+{
+  "$schema": "../../schemas/stable/mxc-config.schema.1.0.0.json",
+  "version": "1.0.0",
+  "containerId": "isolation-session-interleaved",
+  "containment": "isolation_session",
+  "process": {
+    "commandLine": "echo OUT_A & echo ERR_A 1>&2 & echo OUT_B & echo ERR_B 1>&2 & echo OUT_C",
+    "timeout": 30000
+  },
+  "network": {
+    "egress": {
+      "default": "allow"
+    },
+    "ingress": {
+      "default": "allow",
+      "hostLoopback": "allow"
+    }
+  }
+}

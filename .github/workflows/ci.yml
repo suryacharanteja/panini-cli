@@ -7,6 +7,16 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: { python-version: "3.12" }
-      - run: python -m pip install -e ".[dev]"
-      - run: python -m ruff check src tests
+      - run: python -m pip install -r requirements-build.lock
+      - run: python -m pip install --no-deps -e .
+      - run: python -m ruff check src tests evals/harbor_adapter.py evals/pilot.py scripts/prepare-beta.py
       - run: python -m pytest -q
+  harbor-adapter:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: python -m pip install -r requirements-runtime.lock
+      - run: python -m pip install -e ".[benchmark]" pytest==9.1.1
+      - run: python -m pytest tests/test_beta_benchmark.py -q

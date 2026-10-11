@@ -1,0 +1,16 @@
+{
+  "$schema": "../../schemas/stable/mxc-config.schema.1.0.0.json",
+  "version": "1.0.0",
+  "containerId": "wslc-tar-import-docker-save",
+  "containment": "wslc",
+  "process": {
+    "commandLine": "echo 'Hello from docker-save image!' && cat /etc/alpine-release"
+  },
+  "network": {
+    "egress": { "default": "deny" }
+  },
+  "wslc": {
+    "image": "alpine:latest",
+    "imageTarPath": "C:\\workspace\\alpine-docker-save.tar"
+  }
+}

@@ -1,0 +1,10 @@
+{
+    "$schema": "../../schemas/stable/mxc-config.schema.1.0.0.json",
+    "version": "1.0.0",
+    "containment": "seatbelt",
+    "process": {
+        "commandLine": "echo SEATBELT_BASIC_OK && pwd",
+        "timeout": 10000
+    },
+    "filesystem": { "readwritePaths": ["/tmp"] }
+}

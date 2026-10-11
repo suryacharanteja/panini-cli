@@ -23,10 +23,14 @@ dependencies = [
   "rich>=13.0",
   "prompt_toolkit>=3.0",
   "flatbuffers>=25.12.19",
+  "regex>=2026.9.29",
+  "anyio>=4.14.2",
+  "pygments>=2.20.0",
 ]
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "pytest-asyncio>=0.23", "ruff>=0.6"]
+benchmark = ["harbor==0.24.0"]
 
 [project.scripts]
 panini-cli = "panini_cli.agent.cli:main"
@@ -35,12 +39,14 @@ panini-engine = "panini_cli.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+exclude = ["panini_cli.panini-sandbox*"]
 
 [tool.setuptools.dynamic]
 version = { attr = "panini_cli.agent.VERSION" }
 
 [tool.setuptools.package-data]
 "panini_cli.jev" = ["sidecar/*.mjs", "sidecar/package.json"]
+"panini_cli" = ["panini-sandbox/runtime/win-*/*.exe", "panini-sandbox/runtime/win-*/*.dll", "panini-sandbox/runtime/win-*/build.json", "panini-sandbox/runtime/win-*/LICENSE.md", "licenses/*.txt", "licenses/*.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -39,7 +39,7 @@ def configured() -> bool:
 def available() -> tuple[bool, str]:
     """Whether Jev can run here, and if not, the one thing to fix."""
     if not configured():
-        return False, "AI_GATEWAY_API_KEY is not set"
+        return False, "Jev key missing; run `panini-cli auth login jev` or set AI_GATEWAY_API_KEY"
     if not shutil.which(os.getenv("PANINI_NODE", "node")):
         return False, "Node.js is not on PATH"
     script = sidecar_script()
@@ -59,8 +59,27 @@ def setup() -> Path:
     npm = shutil.which("npm")
     if not npm:
         raise RuntimeError("npm was not found; install Node.js 20+ first")
-    subprocess.run([npm, "install", "--no-audit", "--no-fund"], cwd=target, check=True)
+    subprocess.run([npm, "install", "--no-audit", "--no-fund"], cwd=target, check=True, timeout=180)
     return target
+
+
+def check() -> tuple[bool, str]:
+    """Verify installation, process startup, and gateway access with a tiny request."""
+    ready, detail = available()
+    if not ready:
+        return False, detail
+    try:
+        result = ask(
+            "PANINI connection check.",
+            {"connected": {"type": "boolean", "instructions": "Return true for this connection check."}},
+            timeout=20,
+        )
+        if not result.get("ok") or not result.get("answers"):
+            return False, "Gateway returned no evaluation answers; run `jev check` again."
+        return True, "gateway connection verified; Jev routing is enabled"
+    except RuntimeError:
+        # Provider exception strings may contain URLs or request headers. Never display credentials.
+        return False, "Gateway connection failed. Check your AI Gateway key, network, and gateway quota; run `auth login jev` to replace the key."
 
 
 class JevClient:

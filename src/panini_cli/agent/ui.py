@@ -17,6 +17,8 @@ from . import tools
 COMMANDS = [
     "/help", "/new", "/diff", "/review", "/commit", "/compact", "/undo", "/plan", "/model", "/approvals",
     "/image", "/power", "/exit", "/doctor", "/sessions",
+    "/auth login openai", "/auth login jev", "/auth status", "/auth logout jev",
+    "/jev setup", "/jev status", "/jev check",
 ]
 MAX_INDEXED_FILES = 5000
 MAX_ATTACH_LINES = 400
@@ -26,7 +28,8 @@ _MENTION = re.compile(r"(?<![\w@])@([\w./\\-]+)")
 def workspace_files(root):
     found = []
     for directory, dirs, files in os.walk(root):
-        dirs[:] = sorted(d for d in dirs if d not in tools.SKIP_DIRS and not d.startswith("."))
+        dirs[:] = sorted(d for d in dirs if d not in tools.SKIP_DIRS and not d.startswith(".")
+                         and not tools.is_secret(d) and not tools._linked(Path(directory) / d))
         for name in sorted(files):
             found.append((Path(directory) / name).relative_to(root).as_posix())
             if len(found) >= MAX_INDEXED_FILES:
@@ -73,7 +76,8 @@ class RichInput:
         class _Complete(Completer):
             def get_completions(self, document, complete_event):
                 word = document.get_word_before_cursor(WORD=True)
-                if word.startswith("/") and document.text_before_cursor.strip() == word:
+                if document.text_before_cursor.lstrip().startswith("/"):
+                    word = document.text_before_cursor.lstrip()
                     for command in COMMANDS:
                         if command.startswith(word):
                             yield Completion(command, start_position=-len(word))

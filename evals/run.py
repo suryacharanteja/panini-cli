@@ -16,6 +16,7 @@ evals/results/<timestamp>.json and .md. Real models are called, so this costs mo
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -36,21 +37,24 @@ def load_tasks(selected):
 
 
 def prepare(task):
-    folder = Path(tempfile.mkdtemp(prefix=f"panini-eval-{task['id']}-"))
+    archive = HERE.parent / "build" / "eval-workspaces"
+    archive.mkdir(parents=True, exist_ok=True)
+    folder = Path(tempfile.mkdtemp(prefix=f"panini-eval-{task['id']}-", dir=archive))
     for name, content in task["files"].items():
         (folder / name).parent.mkdir(parents=True, exist_ok=True)
         (folder / name).write_text(content, encoding="utf-8")
     for command in (["git", "init", "-q"], ["git", "add", "-A"],
-                    ["git", "-c", "user.name=eval", "-c", "user.email=eval@local", "commit", "-qm", "start"]):
+                    ["git", "-c", "user.name=eval", "-c", "user.email=eval@local", "commit", "--allow-empty", "-qm", "start"]):
         subprocess.run(command, cwd=folder, check=True, capture_output=True)
     return folder
 
 
-def run_panini(folder, task, model, sandbox, timeout):
-    command = [sys.executable, "-m", "panini_cli.agent", "exec", "--json", "-a", "auto",
-               "-C", str(folder), "-m", model, task["prompt"]]
+def run_panini(folder, task, model, sandbox, timeout, binary=None):
+    prefix = [str(binary)] if binary else [sys.executable, "-m", "panini_cli.agent"]
+    command = [*prefix, "exec", "--json", "-a", "auto", "-C", str(folder), "-m", model]
     if sandbox:
-        command[5:5] = ["--sandbox", sandbox]
+        command.extend(["--sandbox", sandbox])
+    command.append(task["prompt"])
     env = {**task_env(), "PYTHONPATH": str(SOURCE)}
     started = time.monotonic()
     completed = subprocess.run(command, env=env, capture_output=True, text=True, encoding="utf-8",
@@ -64,11 +68,17 @@ def run_panini(folder, task, model, sandbox, timeout):
     final = next((e for e in reversed(events) if e.get("type") == "turn.completed"), {})
     routes = [e["model"] for e in events if e.get("type") == "model.routed"]
     return {
+        "binary_sha256": hashlib.sha256(binary.read_bytes()).hexdigest() if binary else None,
         "seconds": round(time.monotonic() - started, 1),
         "status": final.get("status", f"exit {completed.returncode}"),
         "text": final.get("text", ""),
         "tokens": (final.get("usage") or {}).get("total_tokens"),
         "cost_usd": final.get("cost_usd"),
+        "router_cost_usd": sum(e.get("router_cost_usd") or 0 for e in events if e.get("type") == "model.routed"),
+        "router_tokens": sum(e.get("router_input_tokens") or 0 for e in events
+                             if e.get("type") == "model.routed" and e.get("reason") != "local:intent-classifier"),
+        "local_classifier_tokens": sum(e.get("router_input_tokens") or 0 for e in events
+                                       if e.get("reason") == "local:intent-classifier"),
         "models": sorted(set(routes)),
         "stderr": completed.stderr[-2000:] if completed.returncode not in (0, 1) else "",
     }
@@ -106,6 +116,8 @@ def main():
     parser.add_argument("--task", action="append", default=[])
     parser.add_argument("--sandbox", default=None, help="sandbox for PANINI arms (default: PANINI's default)")
     parser.add_argument("--timeout", type=int, default=600)
+    parser.add_argument("--binary", type=Path, help="evaluate a packaged executable instead of the source runtime")
+    parser.add_argument("--label", help="include a baseline/candidate label in each row")
     args = parser.parse_args()
     tasks = load_tasks(set(args.task))
     rows = []
@@ -117,13 +129,14 @@ def main():
                     result = run_codex(folder, task, args.timeout)
                 else:
                     model = "auto" if arm == "auto" else arm.split(":", 1)[1]
-                    result = run_panini(folder, task, model, args.sandbox, args.timeout)
+                    result = run_panini(folder, task, model, args.sandbox, args.timeout, args.binary)
                 ok = not result["status"].startswith("skipped") and solved(folder, task, result)
             except subprocess.TimeoutExpired:
                 result, ok = {"status": "timeout", "seconds": args.timeout}, False
-            finally:
-                shutil.rmtree(folder, ignore_errors=True)
             row = {"arm": arm, "task": task["id"], "solved": ok, **result}
+            row["workspace"] = str(folder)
+            if args.label:
+                row["label"] = args.label
             rows.append(row)
             cost = "-" if row.get("cost_usd") is None else f"${row['cost_usd']:.4f}"
             print(f"{arm:24} {task['id']:24} {'PASS' if ok else 'FAIL'}  {row['seconds']:>6}s  {cost:>9}  {','.join(row.get('models') or [])}",

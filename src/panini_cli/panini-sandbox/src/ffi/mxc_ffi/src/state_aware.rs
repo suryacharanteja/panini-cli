@@ -1,0 +1,980 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
+//! State-aware lifecycle C ABI over the native engine and binding adapters.
+//!
+//! Entry points mirror the SDK's [`mxc_sdk::__ffi::run_lifecycle_json`],
+//! [`mxc_engine::exec_state_aware_attached`] and [`mxc_sdk::__ffi::execute_lifecycle_json`]:
+//!
+//! - [`mxc_run_state_aware_json`] drives the **envelope phases** (`provision` /
+//!   `start` / `stop` / `deprovision`, and a dry run of any phase): JSON
+//!   request in, JSON response envelope out, filled into an
+//!   [`MxcStateAwareResult`].
+//! - [`mxc_exec_state_aware_attached_json`] drives the **exec phase attached
+//!   to this process's stdio** — what an embedding console application needs
+//!   for an interactive terminal. It blocks and reports an [`MxcExecOutcome`].
+//! - [`mxc_exec_state_aware_json`] drives the **exec phase as a live streaming**
+//!   process, returning the same opaque [`crate::MxcSandbox`] handle
+//!   as [`mxc_spawn_json`](crate::mxc_spawn_json) — so the caller reuses the
+//!   `mxc_stream_*` / `mxc_sandbox_*` externs to read/write/wait/kill.
+//! - [`mxc_state_aware_exec_pty`] returns that same lifecycle handle with merged
+//!   PTY output and caller-driven input and resize.
+//! - [`mxc_run_state_aware_exec_json`] blocks until exec finishes and returns
+//!   captured output in [`crate::MxcRunResult`].
+//!
+//! The exec entry points take the **same** request JSON and differ only in
+//! where the workload's stdio goes: relayed onto this process's console,
+//! captured, handed back as ordinary pipes, or handed back as a caller-controlled PTY.
+//!
+//! As elsewhere in this crate, every entry point is [`catch_unwind`]-wrapped,
+//! strings in/out are UTF-8 NUL-terminated, and owned out-pointers must be
+//! freed with the matching destructor.
+
+use std::ffi::c_char;
+use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::ptr;
+
+use mxc_sdk::__ffi::{
+    execute_lifecycle_json, run_lifecycle_json as run_state_aware_json,
+    spawn_in_container_with_pty_json,
+};
+use mxc_sdk::v1::MxcPtySize;
+
+use mxc_sdk::mxc_common::state_aware_backend::ExecOutcome as WaitOutcome;
+use mxc_sdk::mxc_engine::exec_state_aware_attached as exec_attached;
+
+use crate::streaming::{finish_handle, MxcSandbox};
+use crate::{
+    alloc_cstring, cstr_to_str, free_cstr, status_from_error_code, MxcErrorDetail,
+    MXC_STATUS_INVALID_UTF8, MXC_STATUS_NULL_ARGUMENT, MXC_STATUS_PANIC, MXC_STATUS_SUCCESS,
+};
+
+/// The result of an [`mxc_run_state_aware_json`] call.
+///
+/// On success (`status == 0`), `response_json_utf8` holds the response-envelope
+/// JSON (every field of `error` is null). On failure, `error` carries the
+/// message and, when an API call was in flight, which call failed and with what
+/// platform status; `response_json_utf8` is null. All non-null pointers are
+/// owned by the caller and released with [`mxc_state_aware_result_free`].
+#[repr(C)]
+pub struct MxcStateAwareResult {
+    /// `0` on success; otherwise one of the `MXC_STATUS_*` codes.
+    pub status: i32,
+    /// The response-envelope JSON (UTF-8, NUL-terminated) on success, else null.
+    pub response_json_utf8: *mut c_char,
+    /// Why the call failed, when `status != 0`; all-null otherwise.
+    pub error: MxcErrorDetail,
+}
+
+impl MxcStateAwareResult {
+    #[cfg(test)]
+    fn empty() -> Self {
+        Self {
+            status: MXC_STATUS_SUCCESS,
+            response_json_utf8: ptr::null_mut(),
+            error: MxcErrorDetail::none(),
+        }
+    }
+
+    /// A failure this library raised itself, with no API call behind it.
+    fn error(status: i32, message: impl Into<String>) -> Self {
+        Self {
+            status,
+            response_json_utf8: ptr::null_mut(),
+            error: MxcErrorDetail::from_message(message),
+        }
+    }
+
+    /// A failure from the SDK, carrying its API detail across.
+    fn from_sdk_error(error: &mxc_sdk::v1::Error) -> Self {
+        Self {
+            status: status_from_error_code(error.code),
+            response_json_utf8: ptr::null_mut(),
+            error: MxcErrorDetail::from_error(error),
+        }
+    }
+
+    fn free_strings(&mut self) {
+        free_cstr(&mut self.response_json_utf8);
+        self.error.free_strings();
+    }
+}
+
+/// Run a state-aware lifecycle request (envelope phases) and capture the
+/// response-envelope JSON.
+///
+/// Parses `request_json_utf8` (the wire-format request, with a `phase` field),
+/// runs the requested phase, and writes the outcome into `*out`. A non-dry-run
+/// `exec` produces no envelope and is rejected here — run it through
+/// [`mxc_exec_state_aware_attached_json`] to attach the workload to this
+/// process's stdio, or [`mxc_exec_state_aware_json`] to drive the pipes
+/// directly.
+///
+/// Returns the resulting status code (also stored in `out->status`). Returns
+/// [`MXC_STATUS_NULL_ARGUMENT`] **without running the phase** if `out` is null:
+/// the caller has nowhere to receive a sandbox id, so provisioning one would
+/// strand it — nothing else can reclaim a sandbox whose only handle was
+/// discarded. [`mxc_exec_state_aware_json`] checks its out-parameter first for
+/// the same reason.
+///
+/// `experimental` is nonzero to permit an experimental backend such as Windows
+/// Sandbox; with zero such a backend is refused with `backend_unavailable`
+/// before any work is done. Production backends ignore it.
+///
+/// # Safety
+/// - `request_json_utf8` must be null or a valid NUL-terminated UTF-8 C string.
+/// - `out` must be null or point to writable [`MxcStateAwareResult`]-sized storage.
+/// - The caller must release `*out` with [`mxc_state_aware_result_free`] after
+///   every call that populated it, including failures.
+#[no_mangle]
+pub unsafe extern "C" fn mxc_run_state_aware_json(
+    request_json_utf8: *const c_char,
+    dry_run: i32,
+    experimental: i32,
+    out: *mut MxcStateAwareResult,
+) -> i32 {
+    if out.is_null() {
+        return MXC_STATUS_NULL_ARGUMENT;
+    }
+
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        state_aware_inner(request_json_utf8, dry_run != 0, experimental != 0)
+    }))
+    .unwrap_or_else(|panic| {
+        crate::report_panic("mxc_run_state_aware_json", &*panic);
+        MxcStateAwareResult::error(MXC_STATUS_PANIC, "the mxc engine panicked")
+    });
+
+    let status = result.status;
+    // SAFETY: `out` is non-null and caller-guaranteed writable; ownership of the
+    // out-strings transfers to the caller (freed via `mxc_state_aware_result_free`).
+    unsafe { ptr::write(out, result) };
+    status
+}
+
+fn state_aware_inner(
+    request_json_utf8: *const c_char,
+    dry_run: bool,
+    experimental: bool,
+) -> MxcStateAwareResult {
+    // SAFETY: caller contract on `mxc_run_state_aware_json`; borrowed only
+    // within scope.
+    let request_json = match unsafe { cstr_to_str(request_json_utf8) } {
+        Some(s) => s,
+        None if request_json_utf8.is_null() => {
+            return MxcStateAwareResult::error(
+                MXC_STATUS_NULL_ARGUMENT,
+                "request JSON pointer is null",
+            )
+        }
+        None => {
+            return MxcStateAwareResult::error(MXC_STATUS_INVALID_UTF8, "request JSON is not UTF-8")
+        }
+    };
+
+    match run_state_aware_json(request_json, dry_run, experimental) {
+        Ok(response_json) => MxcStateAwareResult {
+            status: MXC_STATUS_SUCCESS,
+            response_json_utf8: alloc_cstring(response_json.as_bytes()),
+            error: MxcErrorDetail::none(),
+        },
+        Err(e) => MxcStateAwareResult::from_sdk_error(&e),
+    }
+}
+
+/// Free the owned out-strings of an [`MxcStateAwareResult`] produced by
+/// [`mxc_run_state_aware_json`]. Idempotent; the struct itself is caller-owned.
+///
+/// # Safety
+/// `r` must be null or point to a result previously filled by
+/// [`mxc_run_state_aware_json`], not already freed.
+#[no_mangle]
+pub unsafe extern "C" fn mxc_state_aware_result_free(r: *mut MxcStateAwareResult) {
+    if r.is_null() {
+        return;
+    }
+    if let Err(panic) = catch_unwind(AssertUnwindSafe(|| {
+        // SAFETY: caller guarantees `r` points to a valid, not-yet-freed result.
+        unsafe { (*r).free_strings() };
+    })) {
+        crate::report_panic("mxc_state_aware_result_free", &*panic);
+    }
+}
+
+/// Run the `exec` phase of a state-aware request as a **live streaming** process.
+///
+/// Parses `request_json_utf8` (an `exec`-phase request with a `sandboxId`),
+/// spawns the process, and on success writes an opaque
+/// [`crate::MxcSandbox`] handle to `*out_handle` (drive it with the
+/// `mxc_stream_*` / `mxc_sandbox_*` externs, free it with `mxc_sandbox_free`).
+/// On failure returns the status code and, if `out_error` is non-null, fills it
+/// with the message plus the failing API call when there was one (release it
+/// with [`mxc_error_detail_free`](crate::mxc_error_detail_free));
+/// `*out_handle` is set to null.
+///
+/// `experimental` permits an experimental backend, as for
+/// [`mxc_run_state_aware_json`].
+///
+/// # Safety
+/// - `request_json_utf8` must be null or a valid NUL-terminated UTF-8 C string.
+/// - `out_handle` must be non-null and point to writable pointer-sized storage
+///   holding **no live handle** — it is overwritten with null before anything
+///   else, and `mxc_sandbox_free` is the handle's only destructor, so free an
+///   existing one before reusing its storage. On success the caller owns
+///   `*out_handle` and frees it with `mxc_sandbox_free`.
+/// - `out_error` must be null, or point to writable storage for one
+///   [`MxcErrorDetail`] that holds **no live detail**: either fresh or
+///   uninitialised storage, or storage already released with
+///   [`mxc_error_detail_free`](crate::mxc_error_detail_free). This function
+///   overwrites that storage without freeing what was there, so handing it a
+///   populated detail leaks that detail's strings.
+#[no_mangle]
+pub unsafe extern "C" fn mxc_exec_state_aware_json(
+    request_json_utf8: *const c_char,
+    experimental: i32,
+    out_handle: *mut *mut MxcSandbox,
+    out_error: *mut MxcErrorDetail,
+) -> i32 {
+    if !out_handle.is_null() {
+        // SAFETY: caller-guaranteed writable pointer-sized storage.
+        unsafe { *out_handle = ptr::null_mut() };
+    }
+    if !out_error.is_null() {
+        // `write` rather than assignment, for the reason given on `mxc_spawn_json`:
+        // the storage may be uninitialised, and nothing here is dropped.
+        // SAFETY: caller-guaranteed writable storage for one detail.
+        unsafe { ptr::write(out_error, MxcErrorDetail::none()) };
+    }
+    if out_handle.is_null() {
+        return MXC_STATUS_NULL_ARGUMENT;
+    }
+
+    let outcome = catch_unwind(AssertUnwindSafe(|| {
+        // SAFETY: caller contract; borrowed only within scope.
+        let request_json = match unsafe { cstr_to_str(request_json_utf8) } {
+            Some(s) => s,
+            None if request_json_utf8.is_null() => {
+                return Err((
+                    MXC_STATUS_NULL_ARGUMENT,
+                    MxcErrorDetail::from_message("request JSON pointer is null"),
+                ))
+            }
+            None => {
+                return Err((
+                    MXC_STATUS_INVALID_UTF8,
+                    MxcErrorDetail::from_message("request JSON is not UTF-8"),
+                ))
+            }
+        };
+        execute_lifecycle_json(request_json, experimental != 0).map_err(|e| {
+            (
+                status_from_error_code(e.code),
+                MxcErrorDetail::from_error(&e),
+            )
+        })
+    }))
+    .unwrap_or_else(|panic| {
+        crate::report_panic("mxc_exec_state_aware_json", &*panic);
+        Err((
+            MXC_STATUS_PANIC,
+            MxcErrorDetail::from_message("the mxc engine panicked"),
+        ))
+    });
+
+    // SAFETY: `out_handle` non-null (checked), `out_error` null or writable.
+    unsafe { crate::streaming::finish_spawn(outcome, out_handle, out_error) }
+}
+
+/// Run a state-aware exec request to completion and capture both output streams.
+///
+/// Uses the same exact request contract and experimental authorization as
+/// [`mxc_exec_state_aware_json`]. Stdout and stderr are drained concurrently by
+/// the Rust SDK; timeouts are reported in the captured result.
+///
+/// # Safety
+/// - `request_json_utf8` must be null or a valid NUL-terminated UTF-8 C string.
+/// - `out` must be null or writable [`crate::MxcRunResult`]-sized storage holding
+///   no live result. A null output is rejected before executing the request.
+/// - Release every populated result, including failures, with
+///   [`crate::mxc_run_result_free`].
+#[no_mangle]
+pub unsafe extern "C" fn mxc_run_state_aware_exec_json(
+    request_json_utf8: *const c_char,
+    experimental: i32,
+    out: *mut crate::MxcRunResult,
+) -> i32 {
+    if out.is_null() {
+        return MXC_STATUS_NULL_ARGUMENT;
+    }
+
+    let result = catch_unwind(|| {
+        // SAFETY: caller contract; borrowed only within this call.
+        let request_json = match unsafe { cstr_to_str(request_json_utf8) } {
+            Some(value) => value,
+            None if request_json_utf8.is_null() => {
+                return crate::MxcRunResult::error(
+                    MXC_STATUS_NULL_ARGUMENT,
+                    "request JSON pointer is null",
+                )
+            }
+            None => {
+                return crate::MxcRunResult::error(
+                    MXC_STATUS_INVALID_UTF8,
+                    "request JSON is not UTF-8",
+                )
+            }
+        };
+        crate::execute_output(
+            execute_lifecycle_json(request_json, experimental != 0).and_then(|process| {
+                process.wait_with_output().map_err(|error| {
+                    mxc_sdk::v1::Error::new(
+                        crate::ErrorCode::BackendError,
+                        format!("waiting for the sandbox to complete failed: {error}"),
+                    )
+                })
+            }),
+        )
+    })
+    .unwrap_or_else(|panic| {
+        crate::report_panic("mxc_run_state_aware_exec_json", &*panic);
+        crate::MxcRunResult::error(MXC_STATUS_PANIC, "the mxc engine panicked")
+    });
+    let status = result.status;
+    // SAFETY: out is non-null and caller-guaranteed writable.
+    unsafe { ptr::write(out, result) };
+    status
+}
+
+/// Run a state-aware exec request with a caller-controlled pseudo-terminal.
+///
+/// # Safety
+/// The pointer and ownership requirements are identical to
+/// [`mxc_exec_state_aware_json`].
+#[no_mangle]
+pub unsafe extern "C" fn mxc_state_aware_exec_pty(
+    request_json_utf8: *const c_char,
+    experimental: i32,
+    rows: u16,
+    cols: u16,
+    out_handle: *mut *mut MxcSandbox,
+    out_error: *mut MxcErrorDetail,
+) -> i32 {
+    if !out_handle.is_null() {
+        unsafe { *out_handle = ptr::null_mut() };
+    }
+    if !out_error.is_null() {
+        unsafe { ptr::write(out_error, MxcErrorDetail::none()) };
+    }
+    if out_handle.is_null() {
+        return MXC_STATUS_NULL_ARGUMENT;
+    }
+
+    let outcome = catch_unwind(AssertUnwindSafe(|| {
+        if rows == 0 || cols == 0 {
+            return Err((
+                crate::MXC_STATUS_MALFORMED_REQUEST,
+                MxcErrorDetail::from_message("PTY rows and columns must be non-zero"),
+            ));
+        }
+        let request_json = match unsafe { cstr_to_str(request_json_utf8) } {
+            Some(value) => value,
+            None if request_json_utf8.is_null() => {
+                return Err((
+                    MXC_STATUS_NULL_ARGUMENT,
+                    MxcErrorDetail::from_message("request JSON pointer is null"),
+                ))
+            }
+            None => {
+                return Err((
+                    MXC_STATUS_INVALID_UTF8,
+                    MxcErrorDetail::from_message("request JSON is not UTF-8"),
+                ))
+            }
+        };
+        spawn_in_container_with_pty_json(
+            request_json,
+            MxcPtySize {
+                rows,
+                cols,
+                pixel_width: 0,
+                pixel_height: 0,
+            },
+            experimental != 0,
+        )
+        .map(MxcSandbox::new_pty)
+        .map_err(|error| {
+            (
+                status_from_error_code(error.code),
+                MxcErrorDetail::from_error(&error),
+            )
+        })
+    }))
+    .unwrap_or_else(|panic| {
+        crate::report_panic("mxc_state_aware_exec_pty", &*panic);
+        Err((
+            MXC_STATUS_PANIC,
+            MxcErrorDetail::from_message("the mxc engine panicked"),
+        ))
+    });
+
+    unsafe { finish_handle(outcome, out_handle, out_error) }
+}
+
+/// How an attached exec finished, filled by
+/// [`mxc_exec_state_aware_attached_json`].
+///
+/// `timed_out` is a separate field so a timeout stays additive to this struct's
+/// layout.
+#[repr(C)]
+pub struct MxcExecOutcome {
+    /// Non-zero when the deadline elapsed and the workload is no longer
+    /// running. `exit_code` is meaningless in that case.
+    pub timed_out: i32,
+    /// The sandboxed process's exit code, when `timed_out` is `0`.
+    pub exit_code: i32,
+}
+
+/// Split out of the `extern "C"` entry point so it is testable without a live
+/// backend: both fields are `i32`, so a transposition compiles and inverts every
+/// caller-visible signal.
+fn exec_outcome_to_abi(outcome: WaitOutcome) -> MxcExecOutcome {
+    match outcome {
+        WaitOutcome::Exited(code) => MxcExecOutcome {
+            timed_out: 0,
+            exit_code: code,
+        },
+        WaitOutcome::TimedOut => MxcExecOutcome {
+            timed_out: 1,
+            exit_code: 0,
+        },
+    }
+}
+
+/// Run a state-aware `exec` **attached to this process's stdio**, blocking until
+/// the sandboxed process exits.
+///
+/// The backend relays the workload's output onto this process's stdout and
+/// stderr; on IsolationSession it also forwards stdin and allocates a
+/// pseudo-console, which merges the sandbox's stderr into its stdout.
+///
+/// **This process's stdout and stdin must both be terminals**, or the call is
+/// refused with
+/// [`MXC_STATUS_MALFORMED_REQUEST`](crate::MXC_STATUS_MALFORMED_REQUEST) and
+/// nothing is run.
+///
+/// Returns `0` on success, with `*out_outcome` filled. On failure returns an
+/// `MXC_STATUS_*` code and fills `*out_error` if it is non-null.
+///
+/// # Safety
+/// - `request_json_utf8` must be null or a valid NUL-terminated UTF-8 C string.
+/// - `out_outcome` must point to writable [`MxcExecOutcome`]-sized storage. It
+///   is checked **before** the workload runs: an attached exec has real side
+///   effects, and with nowhere to report the outcome the caller could not tell
+///   what happened.
+/// - `out_error` must be null, or point to writable storage for one
+///   [`MxcErrorDetail`] that holds **no live detail** — see
+///   [`mxc_exec_state_aware_json`] for why.
+/// - Nothing here is owned by the caller except `*out_error`, released with
+///   [`mxc_error_detail_free`](crate::mxc_error_detail_free).
+#[no_mangle]
+pub unsafe extern "C" fn mxc_exec_state_aware_attached_json(
+    request_json_utf8: *const c_char,
+    experimental: i32,
+    out_outcome: *mut MxcExecOutcome,
+    out_error: *mut MxcErrorDetail,
+) -> i32 {
+    if !out_error.is_null() {
+        // `write` rather than assignment: the storage may be uninitialised, and
+        // nothing here is dropped.
+        // SAFETY: caller-guaranteed writable storage for one detail.
+        unsafe { ptr::write(out_error, MxcErrorDetail::none()) };
+    }
+    if out_outcome.is_null() {
+        return MXC_STATUS_NULL_ARGUMENT;
+    }
+
+    let outcome = catch_unwind(AssertUnwindSafe(|| {
+        // SAFETY: caller contract; borrowed only within scope.
+        let request_json = match unsafe { cstr_to_str(request_json_utf8) } {
+            Some(s) => s,
+            None if request_json_utf8.is_null() => {
+                return Err((
+                    MXC_STATUS_NULL_ARGUMENT,
+                    MxcErrorDetail::from_message("request JSON pointer is null"),
+                ))
+            }
+            None => {
+                return Err((
+                    MXC_STATUS_INVALID_UTF8,
+                    MxcErrorDetail::from_message("request JSON is not UTF-8"),
+                ))
+            }
+        };
+        exec_attached(request_json, experimental != 0).map_err(|e| {
+            (
+                status_from_error_code(e.code),
+                MxcErrorDetail::from_error(&e),
+            )
+        })
+    }))
+    .unwrap_or_else(|panic| {
+        crate::report_panic("mxc_exec_state_aware_attached_json", &*panic);
+        Err((
+            MXC_STATUS_PANIC,
+            MxcErrorDetail::from_message("the mxc engine panicked"),
+        ))
+    });
+
+    match outcome {
+        Ok(finished) => {
+            // SAFETY: `out_outcome` is non-null (checked) and caller-writable.
+            unsafe { ptr::write(out_outcome, exec_outcome_to_abi(finished)) };
+            MXC_STATUS_SUCCESS
+        }
+        Err((status, detail)) => {
+            if out_error.is_null() {
+                // The caller passed no error storage, so the detail's strings
+                // would leak; release them rather than dropping the struct.
+                let mut orphan = detail;
+                // SAFETY: freshly built here and not handed anywhere else.
+                unsafe { crate::mxc_error_detail_free(&mut orphan) };
+            } else {
+                // SAFETY: caller-guaranteed writable storage for one detail.
+                unsafe { ptr::write(out_error, detail) };
+            }
+            status
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ffi::CString;
+
+    const WINDOWS_SANDBOX_PROVISION_REQUEST: &str =
+        r#"{"version":"1.1.0-alpha","phase":"provision","containment":"windows_sandbox"}"#;
+
+    #[test]
+    fn captured_exec_rejects_null_output_before_reading_request() {
+        // SAFETY: both null arguments are explicitly supported.
+        let status = unsafe { mxc_run_state_aware_exec_json(ptr::null(), 0, ptr::null_mut()) };
+        assert_eq!(status, MXC_STATUS_NULL_ARGUMENT);
+    }
+
+    #[test]
+    fn captured_exec_errors_are_owned_run_results() {
+        let malformed = CString::new("{}").unwrap();
+        let unknown_backend = CString::new(
+            r#"{"version":"1.0.0","phase":"exec","sandboxId":"nosuchbackend:abc","process":{"commandLine":"echo hi"}}"#,
+        )
+        .unwrap();
+        let invalid_utf8 = [0xffu8, 0];
+        for (request, expected_status) in [
+            (ptr::null(), MXC_STATUS_NULL_ARGUMENT),
+            (invalid_utf8.as_ptr().cast(), MXC_STATUS_INVALID_UTF8),
+            (malformed.as_ptr(), crate::MXC_STATUS_MALFORMED_REQUEST),
+            (
+                unknown_backend.as_ptr(),
+                crate::MXC_STATUS_UNSUPPORTED_CONTAINMENT,
+            ),
+        ] {
+            let mut result = crate::MxcRunResult::empty();
+            // SAFETY: requests are null or live NUL-terminated buffers; out is writable.
+            let status = unsafe { mxc_run_state_aware_exec_json(request, 0, &mut result) };
+            assert_eq!(status, expected_status);
+            assert_eq!(result.status, expected_status);
+            assert!(!result.error.message_utf8.is_null());
+            assert!(result.stdout_utf8.is_null());
+            assert!(result.stderr_utf8.is_null());
+            // SAFETY: result was populated by the captured-exec entry point.
+            unsafe { crate::mxc_run_result_free(&mut result) };
+            assert!(result.error.message_utf8.is_null());
+        }
+    }
+
+    fn call(json: &str, dry_run: bool) -> MxcStateAwareResult {
+        call_opt(json, dry_run, false)
+    }
+
+    fn call_opt(json: &str, dry_run: bool, experimental: bool) -> MxcStateAwareResult {
+        let j = CString::new(json).unwrap();
+        let mut out = MxcStateAwareResult::empty();
+        // SAFETY: valid string and out pointer.
+        let status = unsafe {
+            mxc_run_state_aware_json(j.as_ptr(), dry_run as i32, experimental as i32, &mut out)
+        };
+        assert_eq!(status, out.status);
+        out
+    }
+
+    /// The state-aware result carries the same API detail as the
+    /// run-to-completion one, and maps the code the same way.
+    #[test]
+    fn from_sdk_error_carries_the_api_detail() {
+        let mut error =
+            mxc_sdk::v1::Error::new(crate::ErrorCode::StaleId, "The provision was not found.");
+        error.operation = Some("IsoSessionOps.StopSessionAsync".to_string());
+        error.native_code = Some("0x80070490".to_string());
+        error.remediation = Some("Re-provision the sandbox.".to_string());
+
+        let mut result = MxcStateAwareResult::from_sdk_error(&error);
+        assert_eq!(result.status, crate::MXC_STATUS_STALE_ID);
+        assert!(result.response_json_utf8.is_null());
+
+        // SAFETY: every pointer was produced by `alloc_cstring` just above.
+        unsafe {
+            assert_eq!(
+                std::ffi::CStr::from_ptr(result.error.operation_utf8)
+                    .to_str()
+                    .unwrap(),
+                "IsoSessionOps.StopSessionAsync"
+            );
+            assert_eq!(
+                std::ffi::CStr::from_ptr(result.error.native_code_utf8)
+                    .to_str()
+                    .unwrap(),
+                "0x80070490"
+            );
+            assert_eq!(
+                std::ffi::CStr::from_ptr(result.error.remediation_utf8)
+                    .to_str()
+                    .unwrap(),
+                "Re-provision the sandbox."
+            );
+        }
+
+        // SAFETY: the result owns only allocations produced by this library.
+        unsafe { mxc_state_aware_result_free(&mut result) };
+        assert_eq!(result.status, crate::MXC_STATUS_STALE_ID);
+        assert!(result.response_json_utf8.is_null());
+        assert!(result.error.message_utf8.is_null());
+        assert!(result.error.operation_utf8.is_null());
+        assert!(result.error.native_code_utf8.is_null());
+        assert!(result.error.remediation_utf8.is_null());
+    }
+
+    #[test]
+    fn one_shot_config_is_malformed_request() {
+        let mut out = call(
+            r#"{"version":"0.9.0-alpha","process":{"commandLine":"echo hi"}}"#,
+            false,
+        );
+        assert_eq!(out.status, crate::MXC_STATUS_MALFORMED_REQUEST);
+        assert!(out.response_json_utf8.is_null());
+        assert!(!out.error.message_utf8.is_null());
+        // SAFETY: filled by `mxc_run_state_aware_json`.
+        unsafe { mxc_state_aware_result_free(&mut out) };
+        assert!(out.error.message_utf8.is_null());
+    }
+
+    #[test]
+    fn exact_payload_errors_keep_their_paths_and_source_coordinates() {
+        for fields in [
+            r#""appId":null"#,
+            r#""appId":17"#,
+            r#""appId":"first","appId":"second""#,
+            r#""appIdd":"typo""#,
+        ] {
+            let json = format!(
+                "{{\n  \"version\":\"0.9.0-alpha\",\n  \"phase\":\"provision\",\n  \
+                 \"containment\":\"isolation_session\",\n  \
+                 \"_comment\":\"typed payload diagnostic\",\n  \
+                 \"isolationSession\":{{\"provision\":{{{fields}}}}}\n}}"
+            );
+            let mut out = call_opt(&json, true, true);
+            assert_eq!(out.status, crate::MXC_STATUS_MALFORMED_REQUEST, "{fields}");
+            assert!(out.response_json_utf8.is_null());
+            assert!(!out.error.message_utf8.is_null());
+            // SAFETY: the call returned a non-null owned error string.
+            let message = unsafe { std::ffi::CStr::from_ptr(out.error.message_utf8) }
+                .to_str()
+                .unwrap();
+            assert!(message.contains("isolationSession.provision"), "{message}");
+            assert!(message.contains("line "), "{message}");
+            assert!(message.contains("column "), "{message}");
+            assert!(out.error.operation_utf8.is_null());
+            assert!(out.error.native_code_utf8.is_null());
+            // SAFETY: all result strings were allocated by mxc_run_state_aware_json.
+            unsafe { mxc_state_aware_result_free(&mut out) };
+        }
+    }
+
+    #[cfg(all(target_os = "windows", feature = "isolation_session"))]
+    #[test]
+    fn typed_provision_configuration_reaches_backend_semantic_validation() {
+        let json = serde_json::json!({
+            "version": "0.9.0-alpha",
+            "phase": "provision",
+            "containment": "isolation_session",
+            "network": {"egress":{"default":"allow"},"ingress":{"default":"allow","hostLoopback":"allow"}},
+            "isolationSession": {"provision": {
+                "appId": "x".repeat(257)
+            }},
+        })
+        .to_string();
+        let mut out = call_opt(&json, true, true);
+        assert_eq!(out.status, crate::MXC_STATUS_POLICY_VALIDATION);
+        assert!(out.response_json_utf8.is_null());
+        assert!(!out.error.message_utf8.is_null());
+        // SAFETY: the failing call returned an owned error string.
+        let message = unsafe { std::ffi::CStr::from_ptr(out.error.message_utf8) }
+            .to_str()
+            .unwrap();
+        assert_eq!(message, "appId must be at most 256 characters (got 257)");
+        assert!(out.error.operation_utf8.is_null());
+        assert!(out.error.native_code_utf8.is_null());
+        // SAFETY: all result strings were allocated by mxc_run_state_aware_json.
+        unsafe { mxc_state_aware_result_free(&mut out) };
+    }
+
+    #[test]
+    fn non_dry_run_exec_is_rejected() {
+        let mut out = call(
+            r#"{"version":"0.9.0-alpha","phase":"exec","sandboxId":"isolationsession:abc","process":{"commandLine":"echo hi"}}"#,
+            false,
+        );
+        assert_eq!(out.status, crate::MXC_STATUS_MALFORMED_REQUEST);
+        // SAFETY: filled by `mxc_run_state_aware_json`.
+        unsafe { mxc_state_aware_result_free(&mut out) };
+    }
+
+    #[test]
+    fn unregistered_backend_prefix_is_unsupported_containment() {
+        // A non-provision phase routes by the sandbox-id prefix; an unregistered
+        // prefix is unsupported_containment — deterministic regardless of the
+        // isolation_session feature or host, and with no backend side effects.
+        // (A real isolation_session provision is avoided: on a capable host it
+        // would actually provision a sandbox. See the mxc-sdk state_aware test.)
+        let mut out = call(
+            r#"{"version":"0.9.0-alpha","phase":"start","sandboxId":"nosuchbackend:abc123"}"#,
+            false,
+        );
+        assert_eq!(out.status, crate::MXC_STATUS_UNSUPPORTED_CONTAINMENT);
+        // SAFETY: filled by `mxc_run_state_aware_json`.
+        unsafe { mxc_state_aware_result_free(&mut out) };
+    }
+
+    #[test]
+    fn null_request_reports_null_argument() {
+        let mut out = MxcStateAwareResult::empty();
+        // SAFETY: null request is explicitly handled; valid out pointer.
+        let status = unsafe { mxc_run_state_aware_json(ptr::null(), 0, 0, &mut out) };
+        assert_eq!(status, MXC_STATUS_NULL_ARGUMENT);
+        assert!(!out.error.message_utf8.is_null());
+        // SAFETY: filled by `mxc_run_state_aware_json`.
+        unsafe { mxc_state_aware_result_free(&mut out) };
+    }
+
+    #[test]
+    fn null_out_reports_null_argument() {
+        let j = CString::new(
+            r#"{"version":"0.9.0-alpha","phase":"provision","containment":"isolation_session"}"#,
+        )
+        .unwrap();
+        // SAFETY: valid string, deliberately-null out.
+        let status = unsafe { mxc_run_state_aware_json(j.as_ptr(), 0, 0, ptr::null_mut()) };
+        assert_eq!(status, MXC_STATUS_NULL_ARGUMENT);
+    }
+
+    #[test]
+    fn exec_null_out_handle_is_null_argument() {
+        let j =
+            CString::new(r#"{"version":"0.9.0-alpha","phase":"exec","sandboxId":"x:y"}"#).unwrap();
+        // SAFETY: valid string, deliberately-null out_handle.
+        let status =
+            unsafe { mxc_exec_state_aware_json(j.as_ptr(), 0, ptr::null_mut(), ptr::null_mut()) };
+        assert_eq!(status, MXC_STATUS_NULL_ARGUMENT);
+    }
+
+    #[test]
+    fn exec_non_exec_phase_reports_error_and_null_handle() {
+        let j = CString::new(
+            r#"{"version":"0.9.0-alpha","phase":"provision","containment":"isolation_session"}"#,
+        )
+        .unwrap();
+        let mut handle: *mut MxcSandbox = ptr::null_mut();
+        let mut err = MxcErrorDetail::none();
+        // SAFETY: valid string and out pointers.
+        let status = unsafe { mxc_exec_state_aware_json(j.as_ptr(), 0, &mut handle, &mut err) };
+        assert_eq!(status, crate::MXC_STATUS_MALFORMED_REQUEST);
+        assert!(handle.is_null());
+        assert!(!err.message_utf8.is_null());
+        // SAFETY: `err` was filled by `mxc_exec_state_aware_json` and not yet freed.
+        unsafe { crate::mxc_error_detail_free(&mut err) };
+    }
+
+    /// Without the opt-in the C ABI refuses an experimental backend, and the
+    /// refusal crosses as a message with **no** API-call detail — nothing was in
+    /// flight when the gate fired.
+    #[test]
+    fn experimental_backend_is_refused_without_the_optin() {
+        let mut out = call_opt(WINDOWS_SANDBOX_PROVISION_REQUEST, true, false);
+        assert_eq!(out.status, crate::MXC_STATUS_BACKEND_UNAVAILABLE);
+        assert!(!out.error.message_utf8.is_null());
+        assert!(out.error.operation_utf8.is_null());
+        assert!(out.error.native_code_utf8.is_null());
+        assert!(out.error.remediation_utf8.is_null());
+        // SAFETY: filled by `mxc_run_state_aware_json`.
+        unsafe { mxc_state_aware_result_free(&mut out) };
+    }
+
+    /// Passing the opt-in gets past the gate. Asserting "not
+    /// `BACKEND_UNAVAILABLE`" rather than a specific success keeps this
+    /// host-independent while still failing if the flag is dropped on the way
+    /// down; the dry run keeps it side-effect-free.
+    #[test]
+    fn the_optin_admits_an_experimental_backend() {
+        let mut out = call_opt(WINDOWS_SANDBOX_PROVISION_REQUEST, true, true);
+        assert_ne!(
+            out.status,
+            crate::MXC_STATUS_BACKEND_UNAVAILABLE,
+            "the opt-in must pass the experimental-backend gate"
+        );
+        assert_ne!(
+            out.status,
+            crate::MXC_STATUS_MALFORMED_REQUEST,
+            "the exact request must reach backend dispatch"
+        );
+        // SAFETY: filled by `mxc_run_state_aware_json`.
+        unsafe { mxc_state_aware_result_free(&mut out) };
+    }
+
+    /// The streaming entry point carries the opt-in on its own path, which the
+    /// envelope tests above cannot cover: the two reach the same gate by
+    /// different routes, so hardcoding the flag in one would leave the other
+    /// green. A `wsb:` id lands on `unsupported_phase` once past the gate, which
+    /// is distinguishable from the gate's own refusal without a host or a
+    /// backend.
+    #[test]
+    fn exec_honours_the_optin_on_its_own_path() {
+        let j = CString::new(
+            r#"{"version":"1.1.0-alpha","phase":"exec","sandboxId":"wsb:0a1b2c3d","process":{"commandLine":"echo hi"}}"#,
+        )
+        .unwrap();
+
+        for (experimental, expect_refused) in [(0, true), (1, false)] {
+            let mut handle: *mut MxcSandbox = ptr::null_mut();
+            let mut err = MxcErrorDetail::none();
+            // SAFETY: valid string and out pointers.
+            let status = unsafe {
+                mxc_exec_state_aware_json(j.as_ptr(), experimental, &mut handle, &mut err)
+            };
+            assert!(handle.is_null(), "no handle is produced either way");
+            if expect_refused {
+                assert_eq!(status, crate::MXC_STATUS_BACKEND_UNAVAILABLE);
+            } else {
+                assert_ne!(status, crate::MXC_STATUS_BACKEND_UNAVAILABLE);
+            }
+            // SAFETY: filled by `mxc_exec_state_aware_json` and not yet freed.
+            unsafe { crate::mxc_error_detail_free(&mut err) };
+        }
+    }
+
+    // ===== mxc_exec_state_aware_attached_json =====
+
+    fn attached(json: &str, experimental: bool) -> (i32, MxcExecOutcome, MxcErrorDetail) {
+        let j = CString::new(json).unwrap();
+        let mut outcome = MxcExecOutcome {
+            timed_out: -1,
+            exit_code: -1,
+        };
+        let mut err = MxcErrorDetail::none();
+        // SAFETY: valid string and out pointers.
+        let status = unsafe {
+            mxc_exec_state_aware_attached_json(
+                j.as_ptr(),
+                experimental as i32,
+                &mut outcome,
+                &mut err,
+            )
+        };
+        (status, outcome, err)
+    }
+
+    #[test]
+    fn attached_rejects_a_null_request() {
+        let mut outcome = MxcExecOutcome {
+            timed_out: -1,
+            exit_code: -1,
+        };
+        let mut err = MxcErrorDetail::none();
+        // SAFETY: null request is the case under test; out pointers are valid.
+        let status =
+            unsafe { mxc_exec_state_aware_attached_json(ptr::null(), 1, &mut outcome, &mut err) };
+        assert_eq!(status, crate::MXC_STATUS_NULL_ARGUMENT);
+        assert!(!err.message_utf8.is_null());
+        // SAFETY: filled above and not yet freed.
+        unsafe { crate::mxc_error_detail_free(&mut err) };
+    }
+
+    #[test]
+    fn attached_rejects_a_null_outcome_before_running_anything() {
+        let j = CString::new(
+            r#"{"version":"0.9.0-alpha","phase":"exec","sandboxId":"isolationsession:x",
+            "process":{"commandLine":"cmd.exe /c echo hi"}}"#,
+        )
+        .unwrap();
+        let mut err = MxcErrorDetail::none();
+        // SAFETY: null outcome storage is the case under test.
+        let status =
+            unsafe { mxc_exec_state_aware_attached_json(j.as_ptr(), 1, ptr::null_mut(), &mut err) };
+        assert_eq!(status, crate::MXC_STATUS_NULL_ARGUMENT);
+        // SAFETY: zeroed above; freeing a none-detail is a no-op.
+        unsafe { crate::mxc_error_detail_free(&mut err) };
+    }
+
+    #[test]
+    fn attached_rejects_a_non_exec_phase() {
+        // The phase check precedes the terminal and single-flight checks, so
+        // this is independent of the test binary's stdio. The message assertion
+        // discriminates it from the other refusals, which share this status.
+        let (status, outcome, mut err) = attached(
+            r#"{"version":"0.9.0-alpha","phase":"provision","containment":"isolation_session",
+                "network":{"egress":{"default":"allow"},"ingress":{"default":"allow","hostLoopback":"allow"}}}"#,
+            true,
+        );
+        assert_eq!(status, crate::MXC_STATUS_MALFORMED_REQUEST);
+        assert_eq!(outcome.timed_out, -1, "the outcome must be left untouched");
+        assert!(!err.message_utf8.is_null());
+        // SAFETY: filled by the call; valid UTF-8 produced by this crate.
+        let message = unsafe { std::ffi::CStr::from_ptr(err.message_utf8) }
+            .to_string_lossy()
+            .into_owned();
+        assert!(
+            message.contains("exec phase"),
+            "the refusal must name the phase requirement, got: {message}"
+        );
+        // SAFETY: filled by the call and not yet freed.
+        unsafe { crate::mxc_error_detail_free(&mut err) };
+    }
+
+    #[test]
+    fn exec_outcome_maps_both_arms() {
+        // Both fields are i32, so a transposition compiles and still reports
+        // success.
+        let exited = exec_outcome_to_abi(WaitOutcome::Exited(42));
+        assert_eq!(exited.timed_out, 0, "an exit is not a timeout");
+        assert_eq!(exited.exit_code, 42, "the exit code must survive unchanged");
+
+        let timed_out = exec_outcome_to_abi(WaitOutcome::TimedOut);
+        assert_eq!(timed_out.timed_out, 1, "a timeout must be flagged");
+        assert_eq!(timed_out.exit_code, 0, "no exit code exists for a timeout");
+    }
+
+    #[test]
+    fn managed_state_aware_goldens_are_accepted_by_native_contract() {
+        for fixture in [
+            include_str!("../../../../tests/policy/state-aware-wslc-provision.json"),
+            include_str!("../../../../tests/policy/state-aware-wslc-exec.json"),
+        ] {
+            if let Err(error) = run_state_aware_json(fixture, true, true) {
+                assert_eq!(
+                    error.code,
+                    mxc_sdk::v1::ErrorCode::BackendUnavailable,
+                    "golden must parse and validate; feature-off is the only accepted failure: {error}"
+                );
+            }
+        }
+    }
+}

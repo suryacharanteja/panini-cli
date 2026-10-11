@@ -2,9 +2,59 @@ import json
 import os
 import subprocess
 import sys
+import pytest
 from pathlib import Path
 
 SOURCE = str(Path(__file__).resolve().parents[1] / "src")
+
+
+@pytest.mark.parametrize("arguments,message", [
+    (("exec", " "), "task is empty"),
+    (("exec", "test", "--output-schema", "missing-schema.json"), "Cannot read the output schema"),
+    (("resume", "missing-session"), "No saved session"),
+])
+def test_invalid_exec_and_resume_inputs(tmp_path, monkeypatch, arguments, message):
+    monkeypatch.setenv("PANINI_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("PANINI_CLI_SANDBOX", "none")
+    completed, _ = cli(tmp_path, [], *arguments)
+    assert completed.returncode in (1, 2)
+    assert message in completed.stdout + completed.stderr
+
+
+def test_interactive_local_commands_and_invalid_approval_mode(tmp_path, monkeypatch):
+    monkeypatch.setenv("PANINI_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("PANINI_CLI_SANDBOX", "none")
+    script = tmp_path / "script.json"
+    script.write_text("[]")
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    env = {**os.environ, "PYTHONPATH": SOURCE, "PANINI_CLI_SCRIPTED_MODEL": str(script), "NO_COLOR": "1"}
+    result = subprocess.run(
+        [sys.executable, "-m", "panini_cli.agent", "-C", str(workspace)],
+        input="/help\n/undo\n/approvals invalid\n/approvals read-only\n/image\n/new\n/exit\n",
+        env=env, capture_output=True, text=True, encoding="utf-8", timeout=60,
+    )
+    assert result.returncode == 0, result.stderr
+    for expected in ("Nothing to undo", "Modes:", "Usage: /image", "Started a new conversation"):
+        assert expected in result.stdout
+
+
+def test_exec_keyboard_interrupt_returns_130_and_closes_agent(tmp_path, monkeypatch):
+    from panini_cli.agent import cli as agent_cli
+    closed = []
+    monkeypatch.setenv("PANINI_CLI_SANDBOX", "none")
+    monkeypatch.setenv("PANINI_DATA_DIR", str(tmp_path / "data"))
+    script = tmp_path / "script.json"
+    script.write_text("[]")
+    monkeypatch.setenv("PANINI_CLI_SCRIPTED_MODEL", str(script))
+    async def interrupted(self, *args, **kwargs):
+        raise KeyboardInterrupt()
+    async def close(self):
+        closed.append(True)
+    monkeypatch.setattr(agent_cli.Agent, "turn", interrupted)
+    monkeypatch.setattr(agent_cli.Agent, "close", close)
+    assert agent_cli.main(["exec", "test", "-C", str(tmp_path)]) == 130
+    assert closed == [True]
 
 
 def cli(tmp_path, steps, *arguments):
@@ -191,7 +241,8 @@ def test_auth_login_saves_verified_key(monkeypatch, capsys):
     saved = []
     monkeypatch.setattr(agent_cli, "_validate_login_key", lambda key: (True, "verified"))
 
-    def save_key(key):
+    def save_key(key, *, target):
+        assert target == auth.TARGET
         saved.append(key)
 
     import panini_cli.agent.auth as auth
@@ -228,7 +279,7 @@ def test_sandbox_status_is_bundled_and_needs_no_api_key(monkeypatch, capsys):
     monkeypatch.setattr(agent_cli, "load_panini_env", lambda: (_ for _ in ()).throw(OSError("no key")))
     monkeypatch.setattr(agent_cli.native_sandbox, "available", lambda: (True, "available"))
     monkeypatch.setattr(agent_cli.native_probe, "verify_boundary", lambda: (True, "boundary passed"))
-    assert agent_cli.main(["sandbox", "status"]) == 0
+    assert agent_cli.main(["--sandbox", "native", "sandbox", "status"]) == 0
     output = capsys.readouterr().out
     assert "bundled in PANINI-CLI.exe" in output
     assert "boundary passed" in output
@@ -240,7 +291,7 @@ def test_sandbox_status_fails_closed_when_boundary_fails(monkeypatch, capsys):
 
     monkeypatch.setattr(agent_cli.native_sandbox, "available", lambda: (True, "available"))
     monkeypatch.setattr(agent_cli.native_probe, "verify_boundary", lambda: (False, "outside write allowed"))
-    assert agent_cli.main(["sandbox", "status"]) == 2
+    assert agent_cli.main(["--sandbox", "native", "sandbox", "status"]) == 2
     assert "unavailable — outside write allowed" in capsys.readouterr().out
 
 
@@ -280,3 +331,72 @@ def test_plan_agents_md_sessions_and_resume(tmp_path, monkeypatch):
     resumed, _ = cli(tmp_path, [{"text": "Still here."}], "resume")
     assert resumed.returncode == 0, resumed.stderr
     assert "Resumed: Fix the bug" in resumed.stdout
+
+
+def test_jev_login_uses_separate_credential(monkeypatch, capsys):
+    from panini_cli.agent import auth, cli as agent_cli
+
+    saved = []
+    monkeypatch.setattr(agent_cli, "_finish_jev_login", lambda console: 0)
+    monkeypatch.setattr(auth, "save_key", lambda key, **kwargs: saved.append((key, kwargs["target"])))
+    monkeypatch.setattr(agent_cli, "_validate_login_key", lambda key: (_ for _ in ()).throw(AssertionError("OpenAI validation called")))
+    monkeypatch.setattr(sys, "stdin", type("Input", (), {"readline": lambda self: "gateway-secret\n"})())
+    assert agent_cli.main(["auth", "login", "jev", "--key-stdin"]) == 0
+    assert saved == [("gateway-secret", auth.PROVIDERS["jev"][2])]
+    output = capsys.readouterr().out
+    assert "saved securely" in output
+    assert "gateway-secret" not in output
+
+
+def test_interactive_jev_commands_are_handled_locally(monkeypatch):
+    from panini_cli.agent import cli as agent_cli
+
+    calls = []
+    monkeypatch.setattr(agent_cli, "router_command", lambda args, console: calls.append(args.jev_command))
+    for action in ("setup", "status", "check"):
+        assert agent_cli._local_session_command(f"/jev {action}", None, None, None, None)
+    assert calls == ["setup", "status", "check"]
+
+
+def test_jev_login_installs_missing_sidecar_and_restarts(monkeypatch, tmp_path):
+    from panini_cli.agent import cli as agent_cli
+    from panini_cli.jev import client
+    from rich.console import Console
+
+    calls = []
+    monkeypatch.setattr(client, "stop", lambda: calls.append("stop"))
+    monkeypatch.setattr(client, "available", lambda: (False, "not installed"))
+    monkeypatch.setattr(client, "sidecar_script", lambda: tmp_path / "missing.mjs")
+    monkeypatch.setattr(agent_cli, "router_command", lambda args, console: calls.append(args.jev_command) or 0)
+    assert agent_cli._finish_jev_login(Console()) == 0
+    assert calls == ["stop", "setup"]
+
+
+@pytest.mark.parametrize("interactive", [False, True])
+def test_jev_logout_clears_credentials_environment_and_warm_router(monkeypatch, capsys, interactive):
+    from panini_cli.agent import auth, cli
+    from panini_cli.jev import client
+    from rich.console import Console
+
+    deleted, stopped = [], []
+    monkeypatch.setenv(auth.PROVIDERS["jev"][1], "private-test-value")
+    monkeypatch.setattr(auth, "delete_key", lambda *, target: deleted.append(target) or True)
+    monkeypatch.setattr(client, "stop", lambda: stopped.append(True))
+    if interactive:
+        result = cli._interactive_auth(Console(), "auth logout jev")
+    else:
+        result = cli.main(["auth", "logout", "jev"])
+    assert result == 0
+    assert deleted == [auth.PROVIDERS["jev"][2]]
+    assert stopped == [True]
+    assert auth.PROVIDERS["jev"][1] not in os.environ
+    assert "private-test-value" not in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("session", ["../escape", "invalid/name"])
+def test_receipts_invalid_session_returns_controlled_error(capsys, session):
+    from panini_cli.agent import cli
+
+    assert cli.main(["receipts", session]) == 2
+    assert "Receipt verification failed" in capsys.readouterr().out
+

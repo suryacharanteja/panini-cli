@@ -36,7 +36,7 @@ def find_panini_cli():
     if external:
         return [external]
     if getattr(sys, "frozen", False):
-        return [sys.executable, "panini-cli"]  # The frozen backend dispatches this subcommand.
+        return [sys.executable]  # The standalone executable is already the CLI entry point.
     return [sys.executable, *BUILTIN]
 
 
@@ -183,7 +183,8 @@ class CodeEngine:
         )
         try:
             async with asyncio.timeout(timeout):
-                await self.server.start()
+                initialized = await self.server.start()
+                panini_protocol = initialized.get("capabilities", {}).get("sessionPolicy") is True
                 check()
                 # Disable discovered external MCP servers in this managed thread. They
                 # retain their native CLI path, but cannot bypass PANINI capability routing.
@@ -210,9 +211,7 @@ class CodeEngine:
                 )
                 if reasoning_effort:
                     overrides["model_reasoning_effort"] = reasoning_effort
-                started = await self.server.request(
-                    "thread/start",
-                    {
+                thread_params = {
                         "cwd": str(self.workspace),
                         "approvalPolicy": "untrusted",
                         "approvalsReviewer": "user",
@@ -221,8 +220,16 @@ class CodeEngine:
                         "config": overrides,
                         **({"model": model} if model else {}),
                         "developerInstructions": "Work only on the user's CLI task in the selected workspace. The host owns confirmations and cancellation. Never automate desktop input. Report commands, test results and limitations accurately. Do not claim that your own summary independently verifies the task.",
-                    },
-                )
+                    }
+                if panini_protocol:
+                    from .agent.config import Settings
+                    settings = Settings.from_env()
+                    thread_params = {key: thread_params[key] for key in ("cwd", "approvalPolicy", "developerInstructions")}
+                    thread_params.update(sandbox=settings.sandbox, config={"mcp_enabled": False, "network_hosts": [],
+                        **({"model_reasoning_effort": reasoning_effort} if reasoning_effort else {})})
+                    if model:
+                        thread_params["model"] = model
+                started = await self.server.request("thread/start", thread_params)
                 self.thread_id = started["thread"]["id"]
                 await emit(
                     {
@@ -236,6 +243,10 @@ class CodeEngine:
                 # enforced below: an unapproved action ends the run.
                 os_sandbox = sandbox.get("type") == "workspaceWrite" and sandbox.get("networkAccess") is False
                 self.every_action_approved = sandbox.get("type") == "confirmEveryAction"
+                if panini_protocol:
+                    os_sandbox = (sandbox.get("backend") == "mxc" and sandbox.get("tier") == "base-container"
+                                  and sandbox.get("filesystemMode") == "workspace-write" and not sandbox.get("networkHosts"))
+                    self.every_action_approved = started.get("approvalPolicy") == "untrusted" and sandbox.get("backend") == "none"
                 if (
                     Path(started.get("cwd", "")).resolve() != self.workspace
                     or started.get("approvalPolicy") != "untrusted"

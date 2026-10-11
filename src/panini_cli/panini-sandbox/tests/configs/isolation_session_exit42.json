@@ -1,0 +1,19 @@
+{
+  "$schema": "../../schemas/stable/mxc-config.schema.1.0.0.json",
+  "version": "1.0.0",
+  "containerId": "isolation-session-exit42",
+  "containment": "isolation_session",
+  "process": {
+    "commandLine": "exit 42",
+    "timeout": 30000
+  },
+  "network": {
+    "egress": {
+      "default": "allow"
+    },
+    "ingress": {
+      "default": "allow",
+      "hostLoopback": "allow"
+    }
+  }
+}

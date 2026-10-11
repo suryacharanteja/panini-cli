@@ -1,0 +1,11 @@
+{
+    "$schema": "../../schemas/stable/mxc-config.schema.1.0.0.json",
+    "version": "1.0.0",
+    "containment": "seatbelt",
+    "process": {
+        "commandLine": "echo REJECT_SHOULD_NOT_RUN",
+        "timeout": 10000
+    },
+    "network": { "egress": { "default": "deny" } },
+    "processContainer": { "network": { "allowedProxyPeer": "someone" } }
+}

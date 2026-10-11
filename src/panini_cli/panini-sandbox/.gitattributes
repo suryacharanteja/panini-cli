@@ -1,0 +1,4 @@
+# Normalize all detected text files to LF in the repository and working tree.
+* text=auto eol=lf
+
+.github/workflows/*.lock.yml linguist-generated=true

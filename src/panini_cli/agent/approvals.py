@@ -13,6 +13,9 @@ from __future__ import annotations
 
 import re
 import shlex
+import os
+
+from .tools import is_secret
 
 # Characters that can write files or run code inside an otherwise harmless command.
 _UNSAFE = re.compile(r"[<>{}`]|\$\(|@\(|\$env:|%[A-Za-z_]+%|\$\{|\$[A-Za-z_]")
@@ -68,6 +71,8 @@ def _segment_trusted(segment):
         return False
     if not all(_path_ok(arg) for arg in args):
         return False
+    if any(is_secret(re.split(r"[\\/]", arg.strip("'\""))[-1]) for arg in args):
+        return False
     if name == "git":
         if not args:
             return False
@@ -96,13 +101,19 @@ def is_trusted(command: str) -> bool:
 
 
 class SessionRules:
-    """Exact commands the user approved for the rest of this session."""
+    """Command grants bound to task, cwd, scope and effective execution policy."""
 
     def __init__(self):
         self.commands = set()
 
-    def allow(self, command):
-        self.commands.add(command.strip())
+    @staticmethod
+    def _key(command, item=None):
+        item = item or {}
+        return (command.strip(), item.get("executionScope", "workspace"),
+                os.path.normcase(item.get("cwd", "")), item.get("policyIdentity", ""), item.get("taskId", ""))
 
-    def allowed(self, command):
-        return command.strip() in self.commands
+    def allow(self, command, item=None):
+        self.commands.add(self._key(command, item))
+
+    def allowed(self, command, item=None):
+        return self._key(command, item) in self.commands

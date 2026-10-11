@@ -1,0 +1,10 @@
+{
+    "$schema": "../../schemas/stable/mxc-config.schema.1.0.0.json",
+    "version": "1.0.0",
+    "containment": "seatbelt",
+    "process": {
+        "commandLine": "echo \"MYVAR=[$MYVAR]\" && echo \"PATH=[$PATH]\" && echo \"HOME=[$HOME]\"",
+        "env": ["MYVAR=hello", "PATH=/custom/bin:/usr/bin:/bin", "HOME=/private/tmp"],
+        "timeout": 20000
+    }
+}

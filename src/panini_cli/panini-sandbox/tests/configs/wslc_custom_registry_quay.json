@@ -1,0 +1,16 @@
+{
+  "$schema": "../../schemas/stable/mxc-config.schema.1.0.0.json",
+  "version": "1.0.0",
+  "containerId": "wslc-quay-registry",
+  "containment": "wslc",
+  "process": {
+    "commandLine": "echo 'Image pulled from Quay' && cat /etc/os-release | head -4"
+  },
+  "network": {
+    "egress": { "default": "allow" },
+    "ingress": { "default": "allow", "hostLoopback": "allow" }
+  },
+  "wslc": {
+    "image": "quay.io/fedora/fedora-minimal:latest"
+  }
+}

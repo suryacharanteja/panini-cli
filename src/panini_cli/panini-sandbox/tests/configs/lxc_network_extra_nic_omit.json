@@ -1,0 +1,16 @@
+{
+  "$schema": "../../schemas/stable/mxc-config.schema.1.0.0.json",
+  "version": "1.0.0",
+  "containerId": "CLI-LXC-Extra-Nic",
+  "containment": "lxc",
+  "process": {
+    "commandLine": "sh -c \"ls /sys/class/net | sed 's/^/IFACE=/'\""
+  },
+  "lifecycle": {
+    "destroyOnExit": false
+  },
+  "lxc": {
+    "distribution": "alpine",
+    "release": "3.23"
+  }
+}

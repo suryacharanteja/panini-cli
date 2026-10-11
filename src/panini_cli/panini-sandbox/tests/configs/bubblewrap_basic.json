@@ -1,0 +1,9 @@
+{
+  "$schema": "../../schemas/stable/mxc-config.schema.1.0.0.json",
+  "version": "1.0.0",
+  "containerId": "CLI-Bubblewrap-Hello-World",
+  "containment": "bubblewrap",
+  "process": {
+    "commandLine": "echo 'Hello from Bubblewrap' && id && cat /etc/os-release | head -2"
+  }
+}

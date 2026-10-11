@@ -1,0 +1,10 @@
+{
+  "$schema": "../../schemas/dev/mxc-config.schema.1.1.0-alpha.json",
+  "version": "1.1.0-alpha",
+  "containerId": "CLI-WindowsSandbox-Timeout",
+  "containment": "windows_sandbox",
+  "process": {
+    "commandLine": "python -S -B -c \"import sys; print(f'Hello from sandbox Python {sys.version}'); print('Sandbox test successful')\"",
+    "timeout": 60000
+  }
+}

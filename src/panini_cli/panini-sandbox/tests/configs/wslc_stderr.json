@@ -1,0 +1,15 @@
+{
+  "$schema": "../../schemas/stable/mxc-config.schema.1.0.0.json",
+  "version": "1.0.0",
+  "containerId": "wslc-stderr",
+  "containment": "wslc",
+  "process": {
+    "commandLine": "echo 'stdout message' && echo 'stderr message' >&2 && echo 'another stdout'"
+  },
+  "network": {
+    "egress": { "default": "deny" }
+  },
+  "wslc": {
+    "image": "alpine:latest"
+  }
+}

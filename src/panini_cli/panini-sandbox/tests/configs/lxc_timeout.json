@@ -1,0 +1,17 @@
+{
+  "$schema": "../../schemas/stable/mxc-config.schema.1.0.0.json",
+  "version": "1.0.0",
+  "containerId": "CLI-LXC-Timeout-Test",
+  "containment": "lxc",
+  "process": {
+    "commandLine": "echo 'Starting long task'; sleep 120; echo 'Should not reach here'",
+    "timeout": 5000
+  },
+  "lifecycle": {
+    "destroyOnExit": true
+  },
+  "lxc": {
+    "distribution": "alpine",
+    "release": "3.23"
+  }
+}

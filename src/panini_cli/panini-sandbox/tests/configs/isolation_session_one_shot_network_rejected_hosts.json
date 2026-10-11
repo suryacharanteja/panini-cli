@@ -1,0 +1,31 @@
+{
+  "$schema": "../../schemas/stable/mxc-config.schema.1.0.0.json",
+  "version": "1.0.0",
+  "containerId": "isolation-session-one-shot-network-rejected-hosts",
+  "containment": "isolation_session",
+  "_comment": "IsolationSession cannot enforce per-destination rules. Use a documentation CIDR to test that refusal without translating a hostname through transient DNS.",
+  "network": {
+    "egress": {
+      "default": "allow",
+      "allow": [
+        {
+          "to": [
+            {
+              "cidr": "192.0.2.0/24"
+            }
+          ]
+        }
+      ]
+    },
+    "ingress": {
+      "default": "allow",
+      "hostLoopback": "allow"
+    }
+  },
+  "process": {
+    "commandLine": "echo unreachable",
+    "cwd": "C:\\",
+    "env": [],
+    "timeout": 30000
+  }
+}

@@ -1,0 +1,6 @@
+{
+    "$schema": "../../schemas/stable/mxc-config.schema.1.0.0.json",
+    "version": "1.0.0",
+    "phase": "stop",
+    "sandboxId": "{{SANDBOX_ID}}"
+}
