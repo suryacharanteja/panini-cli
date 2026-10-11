@@ -112,8 +112,9 @@ maintainer-run full evaluation and review.
 
 ### Published official reference results
 
-These are upstream Terminal-Bench 4.0 results checked on **2026-10-11**, not new
-PANINI head-to-head runs. Accuracy includes the upstream 95% confidence interval
+This table contains **completed upstream evaluations of other agents**, checked
+on **2026-10-11**. PANINI's evaluation status and smoke evidence are documented
+in the preceding section. Accuracy includes the upstream 95% confidence interval
 half-width. Each reference has 330 trials; all four use `max` reasoning effort.
 
 | Agent version | Model | Published accuracy | Upstream-reported total cost |
@@ -122,11 +123,10 @@ half-width. Each reference has 330 trials; all four use `max` reasoning effort.
 | [Codex 0.159.0](https://github.com/harbor-framework/terminal-bench/blob/209679e34327a78ce8e9bf5300b2f317992863c9/leaderboard/submissions/2026-09-30-openai-gpt-6-1-sol-max-codex.json) | GPT-6.1 Sol | 58.18% ± 3.11% | $634.24 |
 | [Claude Code 2.1.284](https://github.com/harbor-framework/terminal-bench/blob/209679e34327a78ce8e9bf5300b2f317992863c9/leaderboard/submissions/2026-09-30-anthropic-claude-opus-5-5-max-claude-code.json) | Opus 5.5 | 64.85% ± 3.11% | $4,718.65 |
 | [Claude Code 2.1.284](https://github.com/harbor-framework/terminal-bench/blob/209679e34327a78ce8e9bf5300b2f317992863c9/leaderboard/submissions/2026-09-30-anthropic-claude-sonnet-5-5-max-claude-code.json) | Sonnet 5.5 | 61.82% ± 2.94% | $7,333.64 |
-| PANINI CLI 2.1.1b1 | GPT-5.6 Luna | **Not measured on the full benchmark** | Unknown |
 
-Different models, agent versions and settings prevent a claim that PANINI is better
-or worse from these data. Even the same-model Codex row needs a full PANINI run
-under comparable settings. Published costs are historical reference values, not
+A comparison with PANINI requires its full evaluation under comparable settings;
+different models, agent versions and settings also affect the results.
+Published costs are historical reference values, not
 verified invoices, future price quotes or a complete compute budget. The frozen
 [comparison snapshot](evals/terminal-bench/leaderboard-comparison.json) records the
 source commit, file checksums, job links and exact metrics.
