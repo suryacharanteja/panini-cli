@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 420" width="1280" height="420" role="img" aria-labelledby="t d">
   <title id="t">PANINI CLI</title>
-  <desc id="d">PANINI CLI: a local-first terminal coding agent. Copper network mark and wordmark on a dark background.</desc>
+  <desc id="d">PANINI CLI: a local-first terminal coding agent. Gold terminal-style P and copper wordmark on a dark background.</desc>
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0" stop-color="#1b1f27"/>
@@ -11,38 +11,21 @@
       <stop offset="0.5" stop-color="#d98a5a"/>
       <stop offset="1" stop-color="#a85a34"/>
     </linearGradient>
-    <radialGradient id="glow" cx="0.5" cy="0.5" r="0.5">
-      <stop offset="0" stop-color="#ffb98a" stop-opacity="0.9"/>
-      <stop offset="1" stop-color="#ffb98a" stop-opacity="0"/>
-    </radialGradient>
-    <filter id="soft" x="-20%" y="-20%" width="140%" height="140%">
-      <feGaussianBlur stdDeviation="6"/>
-    </filter>
+    <linearGradient id="terminal-gold" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="100" y2="130">
+      <stop offset="0" stop-color="#fff4d8"/>
+      <stop offset="0.55" stop-color="#dfc397"/>
+      <stop offset="1" stop-color="#937758"/>
+    </linearGradient>
   </defs>
 
   <rect width="1280" height="420" rx="28" fill="url(#bg)"/>
   <rect x="1" y="1" width="1278" height="418" rx="27" fill="none" stroke="#d98a5a" stroke-opacity="0.25"/>
 
-  <!-- P mark: a network of nodes tracing the letter P -->
-  <g transform="translate(150 60)">
-    <circle cx="110" cy="110" r="120" fill="url(#glow)" opacity="0.35" filter="url(#soft)"/>
-    <g stroke="url(#cu)" stroke-width="3" stroke-linecap="round" fill="none" opacity="0.95">
-      <path d="M40 300 L40 40 L120 12 L200 40 L228 110 L200 180 L120 208 L60 190"/>
-      <path d="M40 40 L60 120 L40 190 L40 300"/>
-      <path d="M120 12 L60 120 L120 208"/>
-      <path d="M200 40 L120 110 L200 180"/>
-      <path d="M60 120 L120 110 L228 110"/>
-      <path d="M120 12 L120 110 L120 208"/>
-      <path d="M40 190 L60 190"/>
-    </g>
-    <g fill="url(#cu)">
-      <circle cx="40" cy="40" r="9"/><circle cx="120" cy="12" r="9"/><circle cx="200" cy="40" r="9"/>
-      <circle cx="228" cy="110" r="9"/><circle cx="200" cy="180" r="9"/><circle cx="120" cy="208" r="9"/>
-      <circle cx="60" cy="190" r="8"/><circle cx="40" cy="190" r="7"/><circle cx="60" cy="120" r="8"/>
-      <circle cx="40" cy="300" r="9"/><circle cx="120" cy="110" r="14"/>
-    </g>
-    <circle cx="120" cy="110" r="24" fill="none" stroke="#ffd9bd" stroke-width="2" opacity="0.8"/>
-    <circle cx="120" cy="110" r="7" fill="#fff1e4"/>
+  <!-- Vector terminal P from assets/panini-cli.ico: bowl, prompt chevron and cursor. -->
+  <g transform="translate(166 62) scale(2.28)" fill="url(#terminal-gold)">
+    <path d="M1 0H62C82.5 0 99 16 99 36S82.5 72 62 72H47L53 62H62C76.7 62 88 50.5 88 36S76.7 10 62 10H11V22L1 12Z"/>
+    <path d="M5 27L39 64L5 101" fill="none" stroke="url(#terminal-gold)" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
+    <rect y="119" width="99" height="11" rx="1.5"/>
   </g>
 
   <!-- wordmark -->
