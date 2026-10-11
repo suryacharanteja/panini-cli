@@ -1,0 +1,285 @@
+{
+  "created_at": "2026-10-11T06:38:07.879909+00:00",
+  "total_budget_usd": 5,
+  "estimated_api_cost_usd": 0.1978898,
+  "reserved_request_cost_upper_bound_usd": 2.517454200000001,
+  "reservation_budget_remaining_usd": 2.482545799999999,
+  "cost_scope": "Recorded price table estimates; provider billing remains authoritative.",
+  "phases": [
+    {
+      "name": "pilot-20261011-101244",
+      "summary": {
+        "attempted": 18,
+        "solved": 18,
+        "failed": 0,
+        "estimated_cost_usd": 0.1108596,
+        "unpriced_trials": 0,
+        "mean_agent_seconds": 21.57511072222222,
+        "trials_missing_agent_time": 0,
+        "estimated_cost_per_solved_task_usd": 0.006158866666666667,
+        "mean_total_seconds": 32.18838888888889,
+        "trials_with_failed_commands": 15,
+        "cli_completed": 3,
+        "tasks_recovered_after_command_failure": 0
+      },
+      "primary_pilot": false,
+      "report": "pilot-20261011-101244/report.html",
+      "hub_jobs": [
+        {
+          "task": "fix-add",
+          "repetition": 1,
+          "url": "https://hub.harborframework.com/jobs/10de41e3-4180-4621-ad5e-879b4ff887b1",
+          "job_id": "10de41e3-4180-4621-ad5e-879b4ff887b1"
+        },
+        {
+          "task": "fizzbuzz",
+          "repetition": 1,
+          "url": "https://hub.harborframework.com/jobs/20e8386b-85c5-4e21-ae5f-9cb7e356f239",
+          "job_id": "20e8386b-85c5-4e21-ae5f-9cb7e356f239"
+        },
+        {
+          "task": "pagination-off-by-one",
+          "repetition": 1,
+          "url": "https://hub.harborframework.com/jobs/1b01934a-aef8-415f-9412-9203dc099787",
+          "job_id": "1b01934a-aef8-415f-9412-9203dc099787"
+        },
+        {
+          "task": "parse-config",
+          "repetition": 1,
+          "url": "https://hub.harborframework.com/jobs/819ce4cd-91a9-45f1-87b7-c02529362743",
+          "job_id": "819ce4cd-91a9-45f1-87b7-c02529362743"
+        },
+        {
+          "task": "rename-across-files",
+          "repetition": 1,
+          "url": "https://hub.harborframework.com/jobs/23474bfc-0fb6-41d9-bfdd-b2dd392bf697",
+          "job_id": "23474bfc-0fb6-41d9-bfdd-b2dd392bf697"
+        },
+        {
+          "task": "verify-after-diagnostic",
+          "repetition": 1,
+          "url": "https://hub.harborframework.com/jobs/fe81da15-a743-400e-b718-5f931c74b90a",
+          "job_id": "fe81da15-a743-400e-b718-5f931c74b90a"
+        },
+        {
+          "task": "fix-add",
+          "repetition": 2,
+          "url": "https://hub.harborframework.com/jobs/33115d6d-322f-4435-b9ca-982e69e46c99",
+          "job_id": "33115d6d-322f-4435-b9ca-982e69e46c99"
+        },
+        {
+          "task": "fizzbuzz",
+          "repetition": 2,
+          "url": "https://hub.harborframework.com/jobs/d0a135c7-a90b-4713-914c-f09921b159b6",
+          "job_id": "d0a135c7-a90b-4713-914c-f09921b159b6"
+        },
+        {
+          "task": "pagination-off-by-one",
+          "repetition": 2,
+          "url": "https://hub.harborframework.com/jobs/44d095c4-299b-446f-a551-0bc54aecbcb0",
+          "job_id": "44d095c4-299b-446f-a551-0bc54aecbcb0"
+        },
+        {
+          "task": "parse-config",
+          "repetition": 2,
+          "url": "https://hub.harborframework.com/jobs/e72afd29-ccbc-4c0f-9ffe-81a7dd6ce192",
+          "job_id": "e72afd29-ccbc-4c0f-9ffe-81a7dd6ce192"
+        },
+        {
+          "task": "rename-across-files",
+          "repetition": 2,
+          "url": "https://hub.harborframework.com/jobs/eb7845fc-ff22-491e-83d4-c277181a692f",
+          "job_id": "eb7845fc-ff22-491e-83d4-c277181a692f"
+        },
+        {
+          "task": "verify-after-diagnostic",
+          "repetition": 2,
+          "url": "https://hub.harborframework.com/jobs/403ee6c1-9c13-4bfe-b670-cbd1fef6478d",
+          "job_id": "403ee6c1-9c13-4bfe-b670-cbd1fef6478d"
+        },
+        {
+          "task": "fix-add",
+          "repetition": 3,
+          "url": "https://hub.harborframework.com/jobs/a1ed040e-8299-4c97-86ad-db84f9cf0bae",
+          "job_id": "a1ed040e-8299-4c97-86ad-db84f9cf0bae"
+        },
+        {
+          "task": "fizzbuzz",
+          "repetition": 3,
+          "url": "https://hub.harborframework.com/jobs/2cf2edf9-ea1c-4a80-8dc8-bb2c3f260548",
+          "job_id": "2cf2edf9-ea1c-4a80-8dc8-bb2c3f260548"
+        },
+        {
+          "task": "pagination-off-by-one",
+          "repetition": 3,
+          "url": "https://hub.harborframework.com/jobs/c2e2caa7-c5fd-4b44-9e97-a932f808d4ba",
+          "job_id": "c2e2caa7-c5fd-4b44-9e97-a932f808d4ba"
+        },
+        {
+          "task": "parse-config",
+          "repetition": 3,
+          "url": "https://hub.harborframework.com/jobs/87d4e5f1-88ea-4e3e-8a2f-9f79cad4aef1",
+          "job_id": "87d4e5f1-88ea-4e3e-8a2f-9f79cad4aef1"
+        },
+        {
+          "task": "rename-across-files",
+          "repetition": 3,
+          "url": "https://hub.harborframework.com/jobs/a748c99c-f842-47a7-a0ee-8b1d8b673e27",
+          "job_id": "a748c99c-f842-47a7-a0ee-8b1d8b673e27"
+        },
+        {
+          "task": "verify-after-diagnostic",
+          "repetition": 3,
+          "url": "https://hub.harborframework.com/jobs/1aa57719-c620-47bb-a477-f92f1e18b6d1",
+          "job_id": "1aa57719-c620-47bb-a477-f92f1e18b6d1"
+        }
+      ]
+    },
+    {
+      "name": "pilot-20261011-102353",
+      "summary": {
+        "attempted": 18,
+        "solved": 18,
+        "failed": 0,
+        "estimated_cost_usd": 0.0870302,
+        "unpriced_trials": 0,
+        "mean_agent_seconds": 26.707313555555558,
+        "trials_missing_agent_time": 0,
+        "estimated_cost_per_solved_task_usd": 0.004835011111111111,
+        "mean_total_seconds": 37.56861111111111,
+        "trials_with_failed_commands": 4,
+        "cli_completed": 18,
+        "tasks_recovered_after_command_failure": 2
+      },
+      "primary_pilot": true,
+      "report": "pilot-20261011-102353/report.html",
+      "hub_jobs": [
+        {
+          "task": "fix-add",
+          "repetition": 1,
+          "url": "https://hub.harborframework.com/jobs/169e0a7d-afc0-4ffa-bc49-824bbce4d5d9",
+          "job_id": "169e0a7d-afc0-4ffa-bc49-824bbce4d5d9"
+        },
+        {
+          "task": "fizzbuzz",
+          "repetition": 1,
+          "url": "https://hub.harborframework.com/jobs/5e00d5ea-185c-4cae-8d93-b3b585e71f55",
+          "job_id": "5e00d5ea-185c-4cae-8d93-b3b585e71f55"
+        },
+        {
+          "task": "pagination-off-by-one",
+          "repetition": 1,
+          "url": "https://hub.harborframework.com/jobs/8e3ad184-4a8f-4b9f-9d26-0a3333b31038",
+          "job_id": "8e3ad184-4a8f-4b9f-9d26-0a3333b31038"
+        },
+        {
+          "task": "parse-config",
+          "repetition": 1,
+          "url": "https://hub.harborframework.com/jobs/42877633-8e89-4f21-b5ba-b848a5578041",
+          "job_id": "42877633-8e89-4f21-b5ba-b848a5578041"
+        },
+        {
+          "task": "rename-across-files",
+          "repetition": 1,
+          "url": "https://hub.harborframework.com/jobs/a36c7268-3289-4274-b2d5-e0a7704cbadf",
+          "job_id": "a36c7268-3289-4274-b2d5-e0a7704cbadf"
+        },
+        {
+          "task": "verify-after-diagnostic",
+          "repetition": 1,
+          "url": "https://hub.harborframework.com/jobs/0fa8a7a7-9aaa-4ec8-b186-e293acfdd409",
+          "job_id": "0fa8a7a7-9aaa-4ec8-b186-e293acfdd409"
+        },
+        {
+          "task": "fix-add",
+          "repetition": 2,
+          "url": "https://hub.harborframework.com/jobs/828235b6-35a5-4925-97a0-e7ae2b497108",
+          "job_id": "828235b6-35a5-4925-97a0-e7ae2b497108"
+        },
+        {
+          "task": "fizzbuzz",
+          "repetition": 2,
+          "url": "https://hub.harborframework.com/jobs/0a00268c-2d1c-486d-b436-3c717db1a394",
+          "job_id": "0a00268c-2d1c-486d-b436-3c717db1a394"
+        },
+        {
+          "task": "pagination-off-by-one",
+          "repetition": 2,
+          "url": "https://hub.harborframework.com/jobs/4457d2fa-0b3e-4b1c-bc34-5ff9ab4bd216",
+          "job_id": "4457d2fa-0b3e-4b1c-bc34-5ff9ab4bd216"
+        },
+        {
+          "task": "parse-config",
+          "repetition": 2,
+          "url": "https://hub.harborframework.com/jobs/312d7e31-80ad-434b-acd0-1b98d41368ed",
+          "job_id": "312d7e31-80ad-434b-acd0-1b98d41368ed"
+        },
+        {
+          "task": "rename-across-files",
+          "repetition": 2,
+          "url": "https://hub.harborframework.com/jobs/876c169e-72fd-4757-b1f3-cd4c763bd501",
+          "job_id": "876c169e-72fd-4757-b1f3-cd4c763bd501"
+        },
+        {
+          "task": "verify-after-diagnostic",
+          "repetition": 2,
+          "url": "https://hub.harborframework.com/jobs/7a5183b5-6206-4846-b2aa-946a1ead7658",
+          "job_id": "7a5183b5-6206-4846-b2aa-946a1ead7658"
+        },
+        {
+          "task": "fix-add",
+          "repetition": 3,
+          "url": "https://hub.harborframework.com/jobs/5ba89cbd-fbbd-422c-92d8-c86570f9c2ec",
+          "job_id": "5ba89cbd-fbbd-422c-92d8-c86570f9c2ec"
+        },
+        {
+          "task": "fizzbuzz",
+          "repetition": 3,
+          "url": "https://hub.harborframework.com/jobs/8d9222eb-4a44-422b-9781-3c37c93ef6f9",
+          "job_id": "8d9222eb-4a44-422b-9781-3c37c93ef6f9"
+        },
+        {
+          "task": "pagination-off-by-one",
+          "repetition": 3,
+          "url": "https://hub.harborframework.com/jobs/4fa86d05-905b-4ed9-8591-63e6fd6c041c",
+          "job_id": "4fa86d05-905b-4ed9-8591-63e6fd6c041c"
+        },
+        {
+          "task": "parse-config",
+          "repetition": 3,
+          "url": "https://hub.harborframework.com/jobs/1d745ff4-f137-4b79-8a35-c4579224d9c4",
+          "job_id": "1d745ff4-f137-4b79-8a35-c4579224d9c4"
+        },
+        {
+          "task": "rename-across-files",
+          "repetition": 3,
+          "url": "https://hub.harborframework.com/jobs/c13e0fa7-7ef6-45e9-8036-e0316b0cfb82",
+          "job_id": "c13e0fa7-7ef6-45e9-8036-e0316b0cfb82"
+        },
+        {
+          "task": "verify-after-diagnostic",
+          "repetition": 3,
+          "url": "https://hub.harborframework.com/jobs/852a90b2-91c2-47fe-b688-4592ceb866f9",
+          "job_id": "852a90b2-91c2-47fe-b688-4592ceb866f9"
+        }
+      ]
+    }
+  ],
+  "official_terminal_bench": {
+    "dataset": "terminal-bench/terminal-bench@4.0.0",
+    "tasks_downloaded": 66,
+    "complete_run_trial_count": 330,
+    "metadata_preflight": "passed; task contents and agent options schema were not validated",
+    "actual_trials_run": 0,
+    "hub_upload": "No official Terminal-Bench trials were run or uploaded. The custom pilot jobs were uploaded separately.",
+    "official_leaderboard_submission": false,
+    "submission_rules": "https://github.com/harbor-framework/terminal-bench/blob/main/leaderboard/SUBMIT.md",
+    "hosted_agent_requirements": "ACP entry point, harbor-agent.json and uv.lock; not implemented in this beta"
+  },
+  "harbor_hub": {
+    "public": true,
+    "jobs_uploaded": 36,
+    "publication_method": "Harbor 0.24.0 official Uploader.upload_job; locally executed jobs, not Hosted Harbor execution.",
+    "artifact_processing": "Credentials redacted; private sessions and encrypted reasoning omitted; recovery metadata recomputed. Trial IDs, rewards and timestamps retained."
+  }
+}

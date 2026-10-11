@@ -48,7 +48,8 @@ See [sandbox permissions and limits](docs/SANDBOX.md) and [the security model](S
 
 ## Harbor pilot
 
-The [pilot reports](evals/pilots/) contain every attempted trial, including CLI failures and the preliminary fixture error.
+The [pilot reports and Harbor Hub links](evals/pilots/) contain every attempted trial, including CLI failures and the preliminary fixture error.
+All 36 jobs were executed locally and uploaded publicly to Harbor Hub. [Open a corrected trial](https://hub.harborframework.com/jobs/169e0a7d-afc0-4ffa-bc49-824bbce4d5d9).
 The adapter evaluates the Python agent in Harbor Linux containers; Windows MXC UAT is a separate check.
 These six small custom tasks are an engineering pilot, not Terminal-Bench or evidence of superiority over other agents.
 
@@ -66,6 +67,17 @@ The pilot freezes the evaluated wheel, records model, image and task hashes, and
 API credentials stay in the host proxy; containers receive an expiring proxy token. Recorded costs use the manifest price table and are estimates, not provider invoices.
 Harbor's generic adapter entry point is `evals.harbor_adapter:PaniniAgent`, with a local `wheel_path` argument and a pinned model.
 The current adapter requires Python 3.12 or newer inside Linux task environments and does not accept Harbor-provided skills or MCP servers.
+
+Harbor Hub stores local evaluations: sign in with `harbor auth login`, then upload each completed job with
+`harbor upload <job-directory> --public`. The `harbor publish` command publishes task datasets.
+Direct Hosted Harbor execution requires an ACP entry point, `harbor-agent.json` and `uv.lock`; this beta provides the local adapter only.
+See [Hub uploads](https://docs.harborframework.com/harbor-hub/upload) and
+[hosted custom agents](https://docs.harborframework.com/hosted-harbor/custom-agents).
+
+The official Terminal-Bench 4.0 dataset has 66 tasks; a complete five-trial run is 330 trials and includes GPU tasks.
+The dataset was downloaded and metadata preflight passed, but no official trials were run.
+Terminal-Bench 4.0 community submissions are currently closed. Check the
+[submission rules](https://github.com/harbor-framework/terminal-bench/blob/main/leaderboard/SUBMIT.md) before planning a leaderboard submission.
 
 ## Earlier routing measurements
 

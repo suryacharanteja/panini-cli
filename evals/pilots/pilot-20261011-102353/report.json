@@ -33,23 +33,27 @@
     "tasks_sha256": "40384393fac824bd6cb520802af7e9f480c76729b87be6c1d1759f5c88b91c53",
     "fixture_revision": 2,
     "pilot_driver_sha256": "f6339f5376362aad8d39a447da01e0671dcb0aad328a9ca5d179a44bf73d8f98",
-    "reserved_cost_upper_bound_usd": 0.5955972,
-    "forwarded_api_calls": 76,
-    "denied_api_calls": 0
+    "reserved_cost_upper_bound_usd": 1.1132894000000004,
+    "forwarded_api_calls": 141,
+    "denied_api_calls": 0,
+    "phase": "corrected-adapter-pilot",
+    "valid_primary_benchmark": true,
+    "timing_scope": "Shared development PC; descriptive timings, not a controlled performance comparison.",
+    "recovery_metric": "Task oracle passed after a failed command was retried successfully with the exact same command string; other recovery styles are not counted."
   },
   "summary": {
-    "attempted": 10,
-    "solved": 10,
+    "attempted": 18,
+    "solved": 18,
     "failed": 0,
-    "estimated_cost_usd": 0.0461688,
+    "estimated_cost_usd": 0.0870302,
     "unpriced_trials": 0,
-    "mean_agent_seconds": 21.2477547,
+    "mean_agent_seconds": 26.707313555555558,
     "trials_missing_agent_time": 0,
-    "estimated_cost_per_solved_task_usd": 0.00461688,
-    "mean_total_seconds": 31.9985,
-    "trials_with_failed_commands": 2,
-    "cli_completed": 10,
-    "tasks_recovered_after_command_failure": 0
+    "estimated_cost_per_solved_task_usd": 0.004835011111111111,
+    "mean_total_seconds": 37.56861111111111,
+    "trials_with_failed_commands": 4,
+    "cli_completed": 18,
+    "tasks_recovered_after_command_failure": 2
   },
   "trials": [
     {
@@ -271,6 +275,182 @@
       "wheel_sha256": "3b71762758078de204404b6d67220a1f9d6c20ae8b7c4fc4396c1ae25428d513",
       "task_checksum": "08b8cfa244abb0d1abfea0427510764d86e93ecf1d7d4782eafc9cbc9293124a",
       "task_recovered_after_command_failure": false
+    },
+    {
+      "task": "rename-across-files",
+      "repetition": 2,
+      "solved": true,
+      "reward": 1.0,
+      "cost_usd_estimated": 0.0055334,
+      "input_tokens": 23215,
+      "output_tokens": 742,
+      "agent_seconds": 51.699905,
+      "total_seconds": 62.89,
+      "turn_status": "completed",
+      "exception_type": null,
+      "recovery": {
+        "failed_commands": 0,
+        "followed_by_successful_command": 0,
+        "unrecovered_commands": 0,
+        "failures_with_successful_same_command_retry": 0
+      },
+      "wheel_sha256": "3b71762758078de204404b6d67220a1f9d6c20ae8b7c4fc4396c1ae25428d513",
+      "task_checksum": "f10c0b07ad69e9f8133db133f4964f0056bd8597011ad3965e949ddf06557a4e",
+      "task_recovered_after_command_failure": false
+    },
+    {
+      "task": "verify-after-diagnostic",
+      "repetition": 2,
+      "solved": true,
+      "reward": 1.0,
+      "cost_usd_estimated": 0.004370000000000001,
+      "input_tokens": 19576,
+      "output_tokens": 379,
+      "agent_seconds": 23.644014,
+      "total_seconds": 35.594,
+      "turn_status": "completed",
+      "exception_type": null,
+      "recovery": {
+        "failed_commands": 1,
+        "followed_by_successful_command": 1,
+        "unrecovered_commands": 0,
+        "failures_with_successful_same_command_retry": 1
+      },
+      "wheel_sha256": "3b71762758078de204404b6d67220a1f9d6c20ae8b7c4fc4396c1ae25428d513",
+      "task_checksum": "32a1bcc41b930224b3198a89ec82a7f6407dbf281c151b0bacec921d7bc36efe",
+      "task_recovered_after_command_failure": true
+    },
+    {
+      "task": "fix-add",
+      "repetition": 3,
+      "solved": true,
+      "reward": 1.0,
+      "cost_usd_estimated": 0.0050290000000000005,
+      "input_tokens": 22145,
+      "output_tokens": 500,
+      "agent_seconds": 28.908431,
+      "total_seconds": 40.609,
+      "turn_status": "completed",
+      "exception_type": null,
+      "recovery": {
+        "failed_commands": 0,
+        "followed_by_successful_command": 0,
+        "unrecovered_commands": 0,
+        "failures_with_successful_same_command_retry": 0
+      },
+      "wheel_sha256": "3b71762758078de204404b6d67220a1f9d6c20ae8b7c4fc4396c1ae25428d513",
+      "task_checksum": "97bb0eea2ba3a33b37d4a8ca207366eb31699dd380342c7d8bb8853a61af3b8c",
+      "task_recovered_after_command_failure": false
+    },
+    {
+      "task": "fizzbuzz",
+      "repetition": 3,
+      "solved": true,
+      "reward": 1.0,
+      "cost_usd_estimated": 0.0050474000000000005,
+      "input_tokens": 21073,
+      "output_tokens": 694,
+      "agent_seconds": 27.599393,
+      "total_seconds": 38.25,
+      "turn_status": "completed",
+      "exception_type": null,
+      "recovery": {
+        "failed_commands": 0,
+        "followed_by_successful_command": 0,
+        "unrecovered_commands": 0,
+        "failures_with_successful_same_command_retry": 0
+      },
+      "wheel_sha256": "3b71762758078de204404b6d67220a1f9d6c20ae8b7c4fc4396c1ae25428d513",
+      "task_checksum": "a4a705e2451b23021d58f230c6fda0ed94639011363dc459976e2334f1284277",
+      "task_recovered_after_command_failure": false
+    },
+    {
+      "task": "pagination-off-by-one",
+      "repetition": 3,
+      "solved": true,
+      "reward": 1.0,
+      "cost_usd_estimated": 0.0047534000000000005,
+      "input_tokens": 19891,
+      "output_tokens": 646,
+      "agent_seconds": 53.251897,
+      "total_seconds": 63.781,
+      "turn_status": "completed",
+      "exception_type": null,
+      "recovery": {
+        "failed_commands": 0,
+        "followed_by_successful_command": 0,
+        "unrecovered_commands": 0,
+        "failures_with_successful_same_command_retry": 0
+      },
+      "wheel_sha256": "3b71762758078de204404b6d67220a1f9d6c20ae8b7c4fc4396c1ae25428d513",
+      "task_checksum": "02da9bd234f449f97df0b9d588c36dca221ab20fbc2e5ee4e504bef9bfae5632",
+      "task_recovered_after_command_failure": false
+    },
+    {
+      "task": "parse-config",
+      "repetition": 3,
+      "solved": true,
+      "reward": 1.0,
+      "cost_usd_estimated": 0.0052791999999999995,
+      "input_tokens": 21278,
+      "output_tokens": 853,
+      "agent_seconds": 26.219897,
+      "total_seconds": 36.86,
+      "turn_status": "completed",
+      "exception_type": null,
+      "recovery": {
+        "failed_commands": 0,
+        "followed_by_successful_command": 0,
+        "unrecovered_commands": 0,
+        "failures_with_successful_same_command_retry": 0
+      },
+      "wheel_sha256": "3b71762758078de204404b6d67220a1f9d6c20ae8b7c4fc4396c1ae25428d513",
+      "task_checksum": "08b8cfa244abb0d1abfea0427510764d86e93ecf1d7d4782eafc9cbc9293124a",
+      "task_recovered_after_command_failure": false
+    },
+    {
+      "task": "rename-across-files",
+      "repetition": 3,
+      "solved": true,
+      "reward": 1.0,
+      "cost_usd_estimated": 0.0068954,
+      "input_tokens": 29455,
+      "output_tokens": 837,
+      "agent_seconds": 43.80415,
+      "total_seconds": 54.125,
+      "turn_status": "completed",
+      "exception_type": null,
+      "recovery": {
+        "failed_commands": 0,
+        "followed_by_successful_command": 0,
+        "unrecovered_commands": 0,
+        "failures_with_successful_same_command_retry": 0
+      },
+      "wheel_sha256": "3b71762758078de204404b6d67220a1f9d6c20ae8b7c4fc4396c1ae25428d513",
+      "task_checksum": "f10c0b07ad69e9f8133db133f4964f0056bd8597011ad3965e949ddf06557a4e",
+      "task_recovered_after_command_failure": false
+    },
+    {
+      "task": "verify-after-diagnostic",
+      "repetition": 3,
+      "solved": true,
+      "reward": 1.0,
+      "cost_usd_estimated": 0.0039536,
+      "input_tokens": 17740,
+      "output_tokens": 338,
+      "agent_seconds": 13.12641,
+      "total_seconds": 24.141,
+      "turn_status": "completed",
+      "exception_type": null,
+      "recovery": {
+        "failed_commands": 1,
+        "followed_by_successful_command": 1,
+        "unrecovered_commands": 0,
+        "failures_with_successful_same_command_retry": 1
+      },
+      "wheel_sha256": "3b71762758078de204404b6d67220a1f9d6c20ae8b7c4fc4396c1ae25428d513",
+      "task_checksum": "32a1bcc41b930224b3198a89ec82a7f6407dbf281c151b0bacec921d7bc36efe",
+      "task_recovered_after_command_failure": true
     }
   ]
 }

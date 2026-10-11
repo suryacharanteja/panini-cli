@@ -33,8 +33,8 @@ protects against, and what it does not.
 See [docs/SANDBOX.md](docs/SANDBOX.md) for runtime installation, permissions, tested
 behaviors and current limitations. This integration has not had an independent security audit.
 
-Please report vulnerabilities privately to the maintainers rather than in a public issue.
-Until a private reporting channel is configured on the public repository, the beta is not ready for public vulnerability submissions.
+Use [GitHub's private vulnerability reporting](https://github.com/suryacharanteja/panini-cli/security/advisories/new)
+to contact the maintainers. Private reporting is enabled on this repository. Do not post credentials or exploit details in a public issue.
 
 ## Public beta and benchmark scope
 

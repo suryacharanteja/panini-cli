@@ -101,7 +101,7 @@ def source_files():
         parts = Path(name).parts
         selected = name in top or parts and parts[0] in roots or name in {"docs/SANDBOX.md", "docs/ROUTER.md"}
         selected = selected or name in {"evals/run.py", "evals/tasks.json", "evals/harbor_adapter.py", "evals/pilot.py"}
-        selected = selected or name.startswith("evals/pilots/") and path.suffix in {".json", ".html"}
+        selected = selected or name.startswith("evals/pilots/") and path.suffix in {".json", ".html", ".md"}
         if selected and path.is_file() and not path.is_symlink() and path.resolve().is_relative_to(ROOT) and not any(p in {"__pycache__", ".pytest_cache"} for p in parts):
             yield path, name.replace("\\", "/")
 
@@ -154,18 +154,17 @@ def bundle(args):
             raise ValueError("Pilot report secret scan failed; do not publish its traces")
         with zipfile.ZipFile(folder / "pilot-results.zip", "w", zipfile.ZIP_DEFLATED) as output:
             for path in sorted(args.pilot.rglob("*")):
-                if path.is_file() and path.suffix in {".json", ".html"}:
+                if path.is_file() and path.suffix in {".json", ".html", ".md"}:
                     output.write(path, path.relative_to(args.pilot).as_posix())
     else:
         pilot_scan = None
     files = {p.name: {"sha256": sha256(p), "bytes": p.stat().st_size} for p in sorted(folder.iterdir()) if
              p.is_file() and not p.name.endswith(".private.json") and p.name not in {"release.json", "SHA256SUMS.txt"}}
     (folder / "SHA256SUMS.txt").write_text("".join(f"{facts['sha256']}  {name}\n" for name, facts in files.items()), encoding="utf-8")
-    manifest = {"version": VERSION, "channel": "public-beta", "published": False, "files": files,
+    manifest = {"version": VERSION, "channel": "public-beta", "files": files,
         "secret_scans": {"source_snapshot": source_scan, "git_history": history_scan, "pilot": pilot_scan},
         "known_limits": ["Executable is unsigned", "Clean Windows machine UAT has not been completed",
-                         "No independent security certification", "Harbor pilot does not test Windows MXC",
-                         "Private vulnerability reporting contact must be configured before publication"],
+                         "No independent security certification", "Harbor pilot does not test Windows MXC"],
         "publication": {"repository": None, "history_safe_to_publish": history_scan["passed"],
                         "source_snapshot_safe_to_publish": source_scan["passed"]}}
     (folder / "release.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
