@@ -1,0 +1,30 @@
+{
+  "job_name": "panini-terminal-bench-4-maintainer",
+  "jobs_dir": "jobs",
+  "n_attempts": 5,
+  "n_concurrent_trials": 1,
+  "retry": {
+    "max_retries": 0
+  },
+  "environment": {
+    "type": "modal"
+  },
+  "datasets": [
+    {
+      "name": "terminal-bench/terminal-bench",
+      "ref": "sha256:39d9f44b40420cde8fdcc087579c0d72a7e14fa3656d603c3f0d22fb35e27732"
+    }
+  ],
+  "agents": [
+    {
+      "import_path": "evals.terminal_bench:TerminalBenchPaniniAgent",
+      "model_name": "openai/gpt-5.6-luna",
+      "kwargs": {
+        "wheel_path": "build/harbor/terminal-bench-ready/panini_cli-2.1.1b1-py3-none-any.whl",
+        "uv_archive_path": "build/harbor/terminal-bench-ready/uv-x86_64-unknown-linux-gnu.tar.gz",
+        "budget_usd": 1.0,
+        "max_steps": 60
+      }
+    }
+  ]
+}

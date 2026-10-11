@@ -37,12 +37,15 @@ class BudgetProxy:
     the configured price table, not provider invoices; provider billing remains authoritative.
     """
 
-    def __init__(self, model, key, budget, prices, upstream="https://api.openai.com/v1", journal=None):
+    def __init__(self, model, key, budget, prices, upstream="https://api.openai.com/v1", journal=None, *, max_output_tokens=2048):
         if not math.isfinite(budget) or budget <= 0 or len(prices) != 2 or any(not math.isfinite(p) or p < 0 for p in prices):
             raise ValueError("Finite positive budget and finite nonnegative prices required")
         if not upstream.startswith("https://"):
             raise ValueError("The upstream model endpoint must use HTTPS")
+        if isinstance(max_output_tokens, bool) or not isinstance(max_output_tokens, int) or not 1 <= max_output_tokens <= 16384:
+            raise ValueError("Output token cap must be an integer from 1 to 16384")
         self.model, self.key, self.limit, self.prices, self.upstream = model, key, budget, prices, upstream.rstrip("/")
+        self.max_output_tokens = max_output_tokens
         self.token = "panini-pilot-" + secrets.token_hex(24)
         self.lock = threading.Lock()
         self.reserved = 0.0
@@ -53,12 +56,12 @@ class BudgetProxy:
         self.journal = journal
 
     def reserve(self, payload):
-        payload["max_output_tokens"] = 2048
+        payload["max_output_tokens"] = self.max_output_tokens
         payload["store"] = False
         if payload.get("model") != self.model:
             raise ValueError("The pilot only permits its pinned model")
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-        estimate = ((len(body) + 8192) * self.prices[0] + 2048 * self.prices[1]) / 1e6
+        estimate = ((len(body) + 8192) * self.prices[0] + self.max_output_tokens * self.prices[1]) / 1e6
         with self.lock:
             if self.reserved + estimate > self.limit:
                 self.denied += 1

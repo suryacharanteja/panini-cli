@@ -1,0 +1,20 @@
+{
+  "windows_tests": {
+    "passed": 392,
+    "skipped": 5,
+    "seconds": 156.24
+  },
+  "harbor_adapter_and_preparation_tests": {
+    "passed": 26
+  },
+  "ruff": "passed",
+  "full_evaluation_launched": false,
+  "official_rank": null,
+  "windows_budget_tests_after_proxy_change": {
+    "passed": 10,
+    "skipped": 2
+  },
+  "public_jobs_uploaded": 2,
+  "public_job_archive_roundtrips": 2,
+  "secret_scan": "passed"
+}

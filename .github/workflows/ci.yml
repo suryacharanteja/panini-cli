@@ -11,7 +11,7 @@ jobs:
         with: { python-version: "3.12" }
       - run: python -m pip install -r requirements-build.lock
       - run: python -m pip install --no-deps -e .
-      - run: python -m ruff check src tests evals/harbor_adapter.py evals/pilot.py scripts/prepare-beta.py
+      - run: python -m ruff check src tests evals/harbor_adapter.py evals/pilot.py evals/terminal_bench.py scripts/prepare-beta.py
       - run: python -m pytest -q
   harbor-adapter:
     runs-on: ubuntu-latest
@@ -21,4 +21,4 @@ jobs:
         with: { python-version: "3.12" }
       - run: python -m pip install -r requirements-runtime.lock
       - run: python -m pip install -e ".[benchmark]" pytest==9.1.1
-      - run: python -m pytest tests/test_beta_benchmark.py -q
+      - run: python -m pytest tests/test_beta_benchmark.py tests/test_terminal_bench.py -q
