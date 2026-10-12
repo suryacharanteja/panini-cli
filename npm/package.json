@@ -1,0 +1,31 @@
+{
+  "name": "panini-cli",
+  "version": "2.1.1-beta.1",
+  "description": "PANINI CLI coding agent with its bundled Windows sandbox",
+  "license": "MIT",
+  "homepage": "https://github.com/suryacharanteja/panini-cli#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/suryacharanteja/panini-cli.git",
+    "directory": "npm"
+  },
+  "bugs": "https://github.com/suryacharanteja/panini-cli/issues",
+  "keywords": ["cli", "coding-agent", "panini", "sandbox", "windows"],
+  "bin": {
+    "panini-cli": "bin/panini-cli.cjs",
+    "panini": "bin/panini-cli.cjs"
+  },
+  "files": ["bin/panini-cli.cjs", "runtime/panini-cli.exe", "THIRD_PARTY_NOTICES.txt", "components.json"],
+  "engines": { "node": ">=22.14.0" },
+  "os": ["win32"],
+  "cpu": ["x64"],
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/",
+    "tag": "beta"
+  },
+  "panini": {
+    "releaseTag": "v2.1.1b1",
+    "executableSHA256": "20cdf97ffdb81ec133fb8eafa54c5de51a1091f00f9857ed635e53ccf7c71264"
+  }
+}

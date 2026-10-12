@@ -48,6 +48,13 @@ The packaged Windows MXC boundary is verified separately on the supported develo
 For PANINI-JARVIS, launch the same executable with `app-server --stdio`; no source checkout is needed at runtime.
 See [sandbox permissions and limits](docs/SANDBOX.md) and [the security model](SECURITY.md).
 
+### npm distribution preparation
+
+An npm wrapper for the Windows x64 beta is prepared in [`npm/`](npm/).
+It bundles the same EXE and exposes `panini-cli` and `panini`, with no Python
+installation or npm installation scripts required. **The npm package is not
+published yet.** See [packaging, local UAT and first-publication steps](docs/NPM.md).
+
 ## Harbor pilot
 
 The [pilot reports and Harbor Hub links](evals/pilots/) contain every attempted trial, including CLI failures and the preliminary fixture error.
